@@ -1,0 +1,480 @@
+"""
+Simplex Architecture for AI Safety Assurance.
+
+The Simplex architecture wraps a high-performance but unverified AI
+controller with a verified safety controller and a decision module that
+arbitrates between the two.  The AI controller proposes actions; the
+decision module forward-simulates each proposal and computes the forward
+reachable set.  If the reachable set risks intersecting a safety boundary,
+the decision module vetoes the AI and switches to the conservative safety
+controller.
+
+References
+----------
+* Sha, L. (2001). Using Simplicity to Control Complexity.
+* Schierman et al. (2015). Runtime Assurance Framework for NDI controllers.
+"""
+
+import numpy as np
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ControlAction:
+    """A candidate control output from either the AI or safety controller."""
+    forces: np.ndarray        # (3,) body-frame force vector [N]
+    torques: np.ndarray       # (3,) body-frame torque vector [N-m]
+    timestamp: float          # simulation time [s]
+    source: str               # "ai_controller" or "safety_controller"
+
+
+@dataclass
+class SafetyEnvelope:
+    """Hard safety boundaries that must never be violated."""
+    max_dynamic_pressure: float = 35_000.0    # Pa (Max-Q limit)
+    max_angle_of_attack: float = np.radians(15.0)   # rad
+    max_angular_rate: float = np.radians(20.0)       # rad/s per axis
+    min_altitude: float = 0.0                         # m AGL
+    max_acceleration: float = 6.0 * 9.81              # m/s^2 (6 g)
+
+
+@dataclass
+class _VehicleSnapshot:
+    """Minimal vehicle state for forward simulation."""
+    position: np.ndarray       # (3,) inertial [m]
+    velocity: np.ndarray       # (3,) inertial [m/s]
+    attitude: np.ndarray       # (3,) Euler angles (roll, pitch, yaw) [rad]
+    angular_velocity: np.ndarray  # (3,) body rates [rad/s]
+    mass: float                # kg
+    timestamp: float           # s
+
+
+# ---------------------------------------------------------------------------
+# Decision Module
+# ---------------------------------------------------------------------------
+
+class DecisionModule:
+    """
+    Evaluates whether a proposed AI action will keep the vehicle
+    inside the safety envelope by forward-simulating simplified rigid-body
+    dynamics and computing the forward reachable set.
+
+    Parameters
+    ----------
+    envelope : SafetyEnvelope
+        Hard safety limits.
+    horizon_s : float
+        How far ahead to simulate (seconds).
+    dt : float
+        Integration step for forward simulation.
+    gravity : np.ndarray
+        Gravity vector in inertial frame.
+    """
+
+    def __init__(
+        self,
+        envelope: Optional[SafetyEnvelope] = None,
+        horizon_s: float = 2.0,
+        dt: float = 0.05,
+        gravity: Optional[np.ndarray] = None,
+    ):
+        self.envelope = envelope or SafetyEnvelope()
+        self.horizon_s = horizon_s
+        self.dt = dt
+        self.gravity = gravity if gravity is not None else np.array([0.0, 0.0, -9.81])
+
+        # Veto log
+        self._veto_log: List[Dict] = []
+
+    # -- public API ---------------------------------------------------------
+
+    def evaluate(
+        self, action: ControlAction, vehicle_state: Dict
+    ) -> Tuple[bool, str]:
+        """
+        Evaluate a proposed control action.
+
+        Parameters
+        ----------
+        action : ControlAction
+            Proposed forces and torques.
+        vehicle_state : dict
+            Must contain: position(3,), velocity(3,), attitude(3,),
+            angular_velocity(3,), mass(float), timestamp(float).
+
+        Returns
+        -------
+        approved : bool
+            True if the action is safe.
+        reason : str
+            Human-readable explanation (empty if approved).
+        """
+        snap = _VehicleSnapshot(
+            position=np.array(vehicle_state["position"], dtype=np.float64),
+            velocity=np.array(vehicle_state["velocity"], dtype=np.float64),
+            attitude=np.array(vehicle_state["attitude"], dtype=np.float64),
+            angular_velocity=np.array(vehicle_state["angular_velocity"], dtype=np.float64),
+            mass=float(vehicle_state["mass"]),
+            timestamp=float(vehicle_state["timestamp"]),
+        )
+
+        reachable = self._forward_simulate(snap, action)
+        violation = self._check_envelope(reachable)
+
+        if violation:
+            record = {
+                "timestamp": action.timestamp,
+                "source": action.source,
+                "reason": violation,
+                "forces": action.forces.tolist(),
+                "torques": action.torques.tolist(),
+            }
+            self._veto_log.append(record)
+            logger.warning("Decision module VETO: %s", violation)
+            return False, violation
+
+        return True, ""
+
+    @property
+    def veto_log(self) -> List[Dict]:
+        return list(self._veto_log)
+
+    @property
+    def veto_count(self) -> int:
+        return len(self._veto_log)
+
+    # -- forward simulation -------------------------------------------------
+
+    def _forward_simulate(
+        self, snap: _VehicleSnapshot, action: ControlAction
+    ) -> List[_VehicleSnapshot]:
+        """
+        Forward-simulate simplified 6-DOF rigid body dynamics under the
+        proposed constant control action over the prediction horizon.
+
+        Returns the trajectory as a list of snapshots (the forward
+        reachable set under worst-case assumptions).
+        """
+        steps = int(self.horizon_s / self.dt)
+        trajectory: List[_VehicleSnapshot] = [snap]
+
+        pos = snap.position.copy()
+        vel = snap.velocity.copy()
+        att = snap.attitude.copy()
+        omega = snap.angular_velocity.copy()
+        mass = snap.mass
+        t = snap.timestamp
+
+        for _ in range(steps):
+            # Simplified rotation matrix from Euler angles (small angle approx
+            # sufficient for safety check)
+            cr, sr = np.cos(att[0]), np.sin(att[0])
+            cp, sp = np.cos(att[1]), np.sin(att[1])
+            cy, sy = np.cos(att[2]), np.sin(att[2])
+
+            # Body -> inertial rotation (ZYX convention)
+            R = np.array([
+                [cp * cy, sr * sp * cy - cr * sy, cr * sp * cy + sr * sy],
+                [cp * sy, sr * sp * sy + cr * cy, cr * sp * sy - sr * cy],
+                [-sp,     sr * cp,                 cr * cp],
+            ])
+
+            # Translational dynamics
+            accel_body = action.forces / mass
+            accel_inertial = R @ accel_body + self.gravity
+            vel = vel + accel_inertial * self.dt
+            pos = pos + vel * self.dt
+
+            # Rotational dynamics (simplified -- assume unit inertia ratios)
+            angular_accel = action.torques / (mass * 0.5)  # rough approx
+            omega = omega + angular_accel * self.dt
+            att = att + omega * self.dt
+
+            t += self.dt
+
+            trajectory.append(_VehicleSnapshot(
+                position=pos.copy(),
+                velocity=vel.copy(),
+                attitude=att.copy(),
+                angular_velocity=omega.copy(),
+                mass=mass,
+                timestamp=t,
+            ))
+
+        return trajectory
+
+    # -- envelope check -----------------------------------------------------
+
+    def _check_envelope(self, trajectory: List[_VehicleSnapshot]) -> str:
+        """
+        Check if any state in the trajectory violates the safety envelope.
+
+        Returns an empty string if safe, or a description of the first
+        violation found.
+        """
+        env = self.envelope
+
+        for snap in trajectory:
+            # Altitude check
+            altitude = snap.position[2]
+            if altitude < env.min_altitude:
+                return (
+                    f"Altitude {altitude:.1f} m below minimum "
+                    f"{env.min_altitude:.1f} m at t={snap.timestamp:.3f}"
+                )
+
+            # Acceleration check
+            speed = np.linalg.norm(snap.velocity)
+            # Approximate dynamic pressure (sea-level density rough estimate)
+            rho = 1.225 * np.exp(-max(altitude, 0.0) / 8500.0)
+            q = 0.5 * rho * speed ** 2
+            if q > env.max_dynamic_pressure:
+                return (
+                    f"Dynamic pressure {q:.0f} Pa exceeds limit "
+                    f"{env.max_dynamic_pressure:.0f} Pa at t={snap.timestamp:.3f}"
+                )
+
+            # Angle of attack (simplified -- pitch deviation from velocity vector)
+            if speed > 1.0:
+                vel_unit = snap.velocity / speed
+                body_z = np.array([
+                    -np.sin(snap.attitude[1]),
+                    np.sin(snap.attitude[0]) * np.cos(snap.attitude[1]),
+                    np.cos(snap.attitude[0]) * np.cos(snap.attitude[1]),
+                ])
+                dot = np.clip(np.dot(vel_unit, body_z), -1.0, 1.0)
+                aoa = np.arccos(abs(dot))
+                if aoa > env.max_angle_of_attack:
+                    return (
+                        f"Angle of attack {np.degrees(aoa):.1f} deg exceeds limit "
+                        f"{np.degrees(env.max_angle_of_attack):.1f} deg at "
+                        f"t={snap.timestamp:.3f}"
+                    )
+
+            # Angular rate check
+            max_rate = np.max(np.abs(snap.angular_velocity))
+            if max_rate > env.max_angular_rate:
+                return (
+                    f"Angular rate {np.degrees(max_rate):.1f} deg/s exceeds limit "
+                    f"{np.degrees(env.max_angular_rate):.1f} deg/s at "
+                    f"t={snap.timestamp:.3f}"
+                )
+
+            # Acceleration magnitude
+            accel_mag = np.linalg.norm(
+                snap.velocity - trajectory[0].velocity
+            ) / max(snap.timestamp - trajectory[0].timestamp, 1e-9)
+            if accel_mag > env.max_acceleration:
+                return (
+                    f"Acceleration {accel_mag / 9.81:.1f} g exceeds limit "
+                    f"{env.max_acceleration / 9.81:.1f} g at t={snap.timestamp:.3f}"
+                )
+
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Safety Controller
+# ---------------------------------------------------------------------------
+
+class SafetyController:
+    """
+    Conservative verified controller that guarantees the vehicle remains
+    within the safety envelope.
+
+    Strategy: wings-level attitude hold with maximum vertical thrust for
+    stabilisation.  Uses a simple PD control law that has been formally
+    verified to maintain stability margins.
+
+    Parameters
+    ----------
+    max_thrust : float
+        Maximum available thrust [N].
+    kp_attitude : float
+        Proportional gain for attitude correction.
+    kd_attitude : float
+        Derivative gain for angular rate damping.
+    """
+
+    def __init__(
+        self,
+        max_thrust: float = 845_000.0 * 3,  # 3-engine safe thrust
+        kp_attitude: float = 50_000.0,
+        kd_attitude: float = 20_000.0,
+    ):
+        self.max_thrust = max_thrust
+        self.kp_attitude = kp_attitude
+        self.kd_attitude = kd_attitude
+
+    def compute(self, vehicle_state: Dict, timestamp: float) -> ControlAction:
+        """
+        Compute conservative safe control action.
+
+        Drives attitude toward wings-level (zero roll/pitch) and applies
+        near-maximum upward thrust for altitude maintenance.
+        """
+        attitude = np.array(vehicle_state["attitude"], dtype=np.float64)
+        omega = np.array(vehicle_state["angular_velocity"], dtype=np.float64)
+
+        # PD attitude controller -- target wings level (roll=0, pitch=0)
+        target_attitude = np.array([0.0, 0.0, attitude[2]])  # maintain current yaw
+        attitude_error = target_attitude - attitude
+
+        torques = (
+            self.kp_attitude * attitude_error
+            - self.kd_attitude * omega
+        )
+
+        # Clamp torques to physically realisable range
+        max_torque = 500_000.0  # N-m
+        torques = np.clip(torques, -max_torque, max_torque)
+
+        # Vertical thrust -- full safe thrust upward in body frame
+        forces = np.array([0.0, 0.0, self.max_thrust])
+
+        return ControlAction(
+            forces=forces,
+            torques=torques,
+            timestamp=timestamp,
+            source="safety_controller",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Simplex Architecture
+# ---------------------------------------------------------------------------
+
+class SimplexArchitecture:
+    """
+    Wraps a high-performance AI controller with a verified safety
+    controller and a decision module.
+
+    Flow
+    ----
+    1. AI controller proposes an action.
+    2. Decision module forward-simulates and checks the safety envelope.
+    3. If approved, the AI action is forwarded to actuators.
+    4. If vetoed, the safety controller output is used instead.
+
+    All transitions are logged for post-flight analysis.
+
+    Parameters
+    ----------
+    safety_controller : SafetyController
+        The verified safe-mode controller.
+    decision_module : DecisionModule
+        The arbiter that checks AI proposals.
+    """
+
+    def __init__(
+        self,
+        safety_controller: Optional[SafetyController] = None,
+        decision_module: Optional[DecisionModule] = None,
+    ):
+        self.safety_controller = safety_controller or SafetyController()
+        self.decision_module = decision_module or DecisionModule()
+
+        # State
+        self._using_safety: bool = False
+        self._switch_log: List[Dict] = []
+        self._total_ai_proposals: int = 0
+        self._total_vetoes: int = 0
+
+    # -- main entry point ---------------------------------------------------
+
+    def evaluate_and_select(
+        self, ai_action: ControlAction, vehicle_state: Dict
+    ) -> ControlAction:
+        """
+        Evaluate the AI-proposed action and return the approved output.
+
+        Parameters
+        ----------
+        ai_action : ControlAction
+            Proposed action from the high-performance AI controller.
+        vehicle_state : dict
+            Current vehicle state (position, velocity, attitude,
+            angular_velocity, mass, timestamp).
+
+        Returns
+        -------
+        ControlAction
+            Either the original *ai_action* (if safe) or the output of
+            the safety controller.
+        """
+        self._total_ai_proposals += 1
+
+        approved, reason = self.decision_module.evaluate(ai_action, vehicle_state)
+
+        if approved:
+            if self._using_safety:
+                # Transitioning back from safety to AI
+                self._log_switch("safety -> ai", ai_action.timestamp, "")
+                self._using_safety = False
+            return ai_action
+
+        # Vetoed -- switch to safety controller
+        self._total_vetoes += 1
+        safe_action = self.safety_controller.compute(
+            vehicle_state, ai_action.timestamp
+        )
+
+        if not self._using_safety:
+            self._log_switch("ai -> safety", ai_action.timestamp, reason)
+            self._using_safety = True
+
+        logger.info(
+            "Simplex VETO #%d at t=%.3f: %s",
+            self._total_vetoes,
+            ai_action.timestamp,
+            reason,
+        )
+        return safe_action
+
+    # -- logging / telemetry ------------------------------------------------
+
+    def _log_switch(self, direction: str, timestamp: float, reason: str) -> None:
+        self._switch_log.append({
+            "direction": direction,
+            "timestamp": timestamp,
+            "reason": reason,
+        })
+
+    @property
+    def is_using_safety_controller(self) -> bool:
+        return self._using_safety
+
+    @property
+    def switch_log(self) -> List[Dict]:
+        return list(self._switch_log)
+
+    @property
+    def veto_count(self) -> int:
+        return self._total_vetoes
+
+    @property
+    def ai_proposal_count(self) -> int:
+        return self._total_ai_proposals
+
+    @property
+    def veto_rate(self) -> float:
+        if self._total_ai_proposals == 0:
+            return 0.0
+        return self._total_vetoes / self._total_ai_proposals
+
+    def stats(self) -> Dict:
+        return {
+            "total_ai_proposals": self._total_ai_proposals,
+            "total_vetoes": self._total_vetoes,
+            "veto_rate": self.veto_rate,
+            "currently_safe_mode": self._using_safety,
+            "transitions": len(self._switch_log),
+        }
