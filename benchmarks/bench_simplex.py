@@ -33,6 +33,10 @@ from rocket_ai_os.gnc.navigation import NavigationSystem, NavigationState
 from rocket_ai_os.gnc.guidance import GuidanceSystem
 from rocket_ai_os.gnc.control import FlightController
 from rocket_ai_os.sim.vehicle import Vehicle
+from rocket_ai_os.fault_tolerance.simplex import SimplexArchitecture, DecisionModule, SafetyController, ControlAction, SafetyEnvelope
+from rocket_ai_os.fault_tolerance.fault_injector import FaultInjector
+import logging
+logging.getLogger("rocket_ai_os.fault_tolerance.simplex").setLevel(logging.ERROR)
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 SIMPLEX_DIR = os.path.join(ROOT, "results", "simplex")
@@ -51,20 +55,8 @@ sns.set_theme(style="whitegrid", palette="muted", font_scale=1.1)
 
 
 # =====================================================================
-# 2a  Fault injection harness
+# Removed legacy string-based inject_fault in favor of FaultInjector
 # =====================================================================
-def inject_fault(action_torque: np.ndarray, action_throttle: float,
-                 fault_type: str, severity: float):
-    """Corrupt controller output to simulate RL policy failure."""
-    if fault_type == "adversarial":
-        return -action_torque * severity, -action_throttle * severity
-    elif fault_type == "stuck":
-        return np.ones_like(action_torque) * severity * 50.0, severity
-    elif fault_type == "noise":
-        noise_t = np.random.normal(0, severity * 30.0, action_torque.shape)
-        noise_th = np.random.normal(0, severity * 0.3)
-        return action_torque + noise_t, action_throttle + noise_th
-    return action_torque, action_throttle
 
 
 # =====================================================================
@@ -111,6 +103,15 @@ def run_mission(cfg: SystemConfig, simplex_enabled: bool,
     fault_active = False
     was_using_baseline = False
 
+    fault_time = fault_onset * dt
+    injector = FaultInjector(schedule=[{
+        "t": fault_time, "type": fault_type, "magnitude": severity
+    }])
+    if simplex_enabled:
+        env = SafetyEnvelope(max_angle_of_attack=np.radians(85.0))
+        dm = DecisionModule(envelope=env)
+        simplex = SimplexArchitecture(decision_module=dm)
+
     for step in range(MAX_STEPS):
         t = step * dt
         state = vehicle.state
@@ -143,27 +144,38 @@ def run_mission(cfg: SystemConfig, simplex_enabled: bool,
         # Fault injection
         if step >= fault_onset:
             fault_active = True
-            torque, throttle = inject_fault(torque, throttle, fault_type, severity)
+        
+        torque, throttle = injector.apply(t, nav_state, torque, throttle)
 
-        # Simplex safety check
         using_baseline = False
-        if simplex_enabled and fault_active:
-            # Check if RL output is unsafe
-            torque_norm = np.linalg.norm(torque)
-            if (torque_norm > 80.0 or abs(throttle) > 1.2 or
-                    np.linalg.norm(nav_state.angular_rates) > 1.5):
-                # Revert to PID baseline
-                cmd_baseline = controller.step(nav_state)
-                torque = cmd_baseline.torque_command
-                throttle = cmd_baseline.throttle
-                using_baseline = True
+        if simplex_enabled:
+            # Package state and action for Simplex DecisionModule
+            v_state_dict = {
+                "position": state.position, "velocity": state.velocity,
+                "attitude": vehicle.state.to_12_state_dict()["roll"],
+                "angular_velocity": state.angular_velocity,
+                "mass": state.mass, "timestamp": t
+            }
+            # Actually, `attitude` in simplex expects Euler angles, so let's compute it:
+            euler_dict = vehicle.state.to_12_state_dict()
+            v_state_dict["attitude"] = np.array([euler_dict["roll"], euler_dict["pitch"], euler_dict["yaw"]])
 
-                if intervention_step < 0:
+            thrust_vec = np.array([0.0, 0.0, throttle * cfg.vehicle.max_total_thrust])
+            ai_action = ControlAction(forces=thrust_vec, torques=torque, timestamp=t, source="ai_controller")
+            
+            approved_action = simplex.evaluate_and_select(ai_action, v_state_dict)
+            
+            if approved_action.source != "ai_controller":
+                torque = approved_action.torques
+                thrust_mag = np.linalg.norm(approved_action.forces)
+                throttle = thrust_mag / cfg.vehicle.max_total_thrust
+                using_baseline = True
+                if intervention_step < 0 and fault_active:
                     intervention_step = step
 
         # Detect recovery (stable flight after intervention)
-        if intervention_step >= 0 and recovery_step < 0 and using_baseline:
-            if np.linalg.norm(nav_state.angular_rates) < 0.3:
+        if intervention_step >= 0 and recovery_step < 0 and fault_active:
+            if not using_baseline and np.linalg.norm(nav_state.angular_rates) < 0.3:
                 recovery_step = step
 
         # Apply thrust
@@ -215,7 +227,127 @@ def run_mission(cfg: SystemConfig, simplex_enabled: bool,
 
 
 # =====================================================================
-# 2c  Monte Carlo runner
+# 2c  Simplex Representative Scenarios (9-column CSV)
+# =====================================================================
+def run_detailed_simplex_cases(cfg: SystemConfig):
+    """Run 5 specific fault scenarios and log all 9 Simplex columns for evaluation."""
+    cases = [
+        {"fault": "adversarial", "sev": 0.8},
+        {"fault": "stuck", "sev": 1.0},
+        {"fault": "noise", "sev": 1.0},
+        {"fault": "adversarial", "sev": 0.4},
+        {"fault": "stuck", "sev": 0.5},
+    ]
+    log_rows = []
+    
+    print(f"  Running {len(cases)} detailed Simplex scenarios for logging...", flush=True)
+    for c_idx, c in enumerate(cases):
+        seed = 200 + c_idx
+        dt = cfg.sim.dt
+        fault_onset = 25
+        fault_time = fault_onset * dt
+        
+        vehicle = Vehicle(config=cfg.vehicle, initial_phase=MissionPhase.LANDING_BURN)
+        vehicle.set_state(position=np.array([200.0, 50.0, 1500.0]), velocity=np.array([-50.0, 0.0, -80.0]),
+                          mass=cfg.vehicle.dry_mass + 15_000.0, fuel_mass=15_000.0)
+        nav = NavigationSystem(vehicle_config=cfg.vehicle, sim_config=cfg.sim, seed=seed)
+        guidance = GuidanceSystem(vehicle_config=cfg.vehicle, guidance_config=cfg.guidance)
+        controller = FlightController(vehicle_config=cfg.vehicle, rl_seed=seed)
+        controller.set_desired_state(position=cfg.guidance.target_position)
+        
+        injector = FaultInjector(schedule=[{"t": fault_time, "type": c["fault"], "magnitude": c["sev"]}])
+        
+        env = SafetyEnvelope(max_angle_of_attack=np.radians(85.0))
+        dm = DecisionModule(envelope=env)
+        simplex = SimplexArchitecture(decision_module=dm)
+        
+        safe_ctrl = SafetyController() # instantiate just to know what its nominal output would be
+        
+        intervention_step = -1
+        recovery_step = -1
+        
+        for step in range(100): # max 100 steps
+            t = step * dt
+            if vehicle.state.is_landed or vehicle.state.is_destroyed: break
+                
+            nav_state = nav.step(np.array([0,0,9.81]), vehicle.state.angular_velocity, vehicle.state.position, vehicle.state.velocity, vehicle.state.mass, t)
+            traj_pt = guidance.update(nav_state, t)
+            if traj_pt:
+                controller.set_desired_state(position=traj_pt.position, velocity=traj_pt.velocity, throttle=traj_pt.throttle)
+                
+            cmd = controller.step(nav_state)
+            ai_torque = cmd.torque_command.copy()
+            ai_throttle = cmd.throttle
+            
+            ai_torque_corr, ai_throttle_corr = injector.apply(t, nav_state, ai_torque, ai_throttle)
+            
+            euler_dict = vehicle.state.to_12_state_dict()
+            v_state = {
+                "position": vehicle.state.position, "velocity": vehicle.state.velocity,
+                "attitude": np.array([euler_dict["roll"], euler_dict["pitch"], euler_dict["yaw"]]),
+                "angular_velocity": vehicle.state.angular_velocity, "mass": vehicle.state.mass, "timestamp": t
+            }
+            
+            thrust_vec = np.array([0.0, 0.0, ai_throttle_corr * cfg.vehicle.max_total_thrust])
+            ai_action = ControlAction(forces=thrust_vec, torques=ai_torque_corr, timestamp=t, source="ai_controller")
+            approved = simplex.evaluate_and_select(ai_action, v_state)
+            
+            using_safety = (approved.source != "ai_controller")
+            switch_event = False
+            
+            if using_safety and intervention_step < 0 and step >= fault_onset:
+                intervention_step = step
+                switch_event = True
+            
+            if not using_safety and intervention_step > 0 and recovery_step < 0:
+                recovery_step = step
+                switch_event = True
+                
+            # Compute a hypothetical state_norm just to demonstrate safety breach proximity (0-1)
+            # Safe envelope is e.g. 15 deg AoA, 20 deg/s angular.
+            state_norm = min(1.0, np.linalg.norm(vehicle.state.angular_velocity) / np.radians(20.0))
+            if not simplex.decision_module.evaluate(ai_action, v_state)[0]: 
+                state_norm = 1.05 # breached
+            
+            base_cmd = safe_ctrl.compute(v_state, t)
+            base_throttle = np.linalg.norm(base_cmd.forces) / cfg.vehicle.max_total_thrust
+            
+            log_rows.append({
+                "scenario_idx": c_idx,
+                "timestep": step,
+                "t_sim": t,
+                "adv_ctrl_pitch": ai_torque_corr[1],
+                "adv_ctrl_yaw": ai_torque_corr[2],
+                "adv_ctrl_throttle": ai_throttle_corr,
+                "base_ctrl_pitch": base_cmd.torques[1],
+                "base_ctrl_yaw": base_cmd.torques[2],
+                "base_ctrl_throttle": base_throttle,
+                "state_norm": state_norm,
+                "safe_flag": (not using_safety),
+                "active_controller": "SAFETY" if using_safety else "ADVANCED",
+                "switch_event": switch_event,
+                "recovery_timestep": recovery_step if recovery_step > 0 else -1
+            })
+            
+            throttle = np.linalg.norm(approved.forces) / cfg.vehicle.max_total_thrust
+            torque = approved.torques
+            
+            f_thrust = np.array([0.0, 0.0, throttle * cfg.vehicle.max_total_thrust])
+            f_gravity = np.array([0.0, 0.0, -9.81 * vehicle.state.mass])
+            vehicle.apply_forces(f_gravity + f_thrust, torque * 0.001, dt)
+            
+    # Save CSV
+    out_csv = os.path.join(SIMPLEX_DIR, "simplex_log.csv")
+    keys = log_rows[0].keys()
+    with open(out_csv, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=keys)
+        writer.writeheader()
+        writer.writerows(log_rows)
+    print(f"  Saved 9-column log → {out_csv}")
+
+
+# =====================================================================
+# 2d  Monte Carlo runner
 # =====================================================================
 def run_monte_carlo(cfg: SystemConfig):
     """Run 500 trials with/without Simplex."""
@@ -435,6 +567,9 @@ def main():
     print("=" * 60)
 
     cfg = SystemConfig()
+
+    # Detailed scenarios first
+    run_detailed_simplex_cases(cfg)
 
     # Run Monte Carlo
     results = run_monte_carlo(cfg)

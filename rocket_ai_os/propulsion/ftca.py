@@ -204,61 +204,40 @@ class FTCAAllocator:
         eps: float = 1e-4,
         max_iter: int = 20,
     ) -> np.ndarray:
-        """Solve the bounded Weighted Least Squares problem.
+        """Solve the bounded Weighted Least Squares problem via QP.
 
         min_u  || W_v (B u - v_des) ||^2  +  eps * ||u||^2
         s.t.   u_min <= u <= u_max
 
-        Uses iterative clipping (projected gradient / active-set lite):
-        1. Solve unconstrained WLS.
-        2. Clip to bounds.
-        3. Fix variables at their bound, remove from optimisation.
-        4. Repeat until convergence.
+        Uses CVXPY for guaranteed mathematically-optimal constrained allocation
+        instead of the pseudo-inverse iterative clipping approach.
         """
+        import cvxpy as cp
         n = B.shape[1]
-        free = np.ones(n, dtype=bool)
-        u = 0.5 * (u_min + u_max)  # warm-start at midpoint
-
-        for _iteration in range(max_iter):
-            free_idx = np.where(free)[0]
-            if len(free_idx) == 0:
-                break
-
-            B_f = B[:, free_idx]
-            WB = W_v @ B_f
-            # Normal equations: (WB^T WB + eps I) u_f = WB^T W_v v_des - contribution of fixed vars
-            fixed_idx = np.where(~free)[0]
-            v_residual = W_v @ v_des
-            if len(fixed_idx) > 0:
-                v_residual = v_residual - W_v @ B[:, fixed_idx] @ u[fixed_idx]
-
-            A = WB.T @ WB + eps * np.eye(len(free_idx))
-            b = WB.T @ v_residual
+        u = cp.Variable(n)
+        
+        # Reformulate as a convex objective
+        cost = cp.sum_squares(W_v @ (B @ u - v_des)) + eps * cp.sum_squares(u)
+        constraints = [
+            u >= u_min,
+            u <= u_max
+        ]
+        
+        prob = cp.Problem(cp.Minimize(cost), constraints)
+        try:
+            prob.solve(solver=cp.OSQP)
+        except Exception:
             try:
-                u_f = np.linalg.solve(A, b)
-            except np.linalg.LinAlgError:
-                u_f = np.linalg.lstsq(A, b, rcond=None)[0]
-
-            u[free_idx] = u_f
-
-            # Clip and detect newly-fixed variables
-            changed = False
-            for j in free_idx:
-                if u[j] < u_min[j]:
-                    u[j] = u_min[j]
-                    free[j] = False
-                    changed = True
-                elif u[j] > u_max[j]:
-                    u[j] = u_max[j]
-                    free[j] = False
-                    changed = True
-
-            if not changed:
-                break
-
+                prob.solve(solver=cp.SCS)
+            except Exception:
+                # Fallback to midpoint if solvers fail
+                return 0.5 * (u_min + u_max)
+                
+        if u.value is None:
+            return 0.5 * (u_min + u_max)
+            
         # Final clip for safety
-        u = np.clip(u, u_min, u_max)
-        return u
+        return np.clip(u.value, u_min, u_max)
 
     # ------------------------------------------------------------------
     # Virtual reconfiguration

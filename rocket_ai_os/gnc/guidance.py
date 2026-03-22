@@ -379,6 +379,60 @@ class GFOLDSolver:
 
 
 # ---------------------------------------------------------------------------
+# Baselines
+# ---------------------------------------------------------------------------
+
+class ProportionalGuidanceSolver:
+    """Baseline non-optimal proportional guidance for latency comparison."""
+
+    def __init__(
+        self,
+        vehicle_config: Optional[VehicleConfig] = None,
+        guidance_config: Optional[GuidanceConfig] = None,
+        sim_config: Optional[SimConfig] = None,
+    ) -> None:
+        self._vc = vehicle_config if vehicle_config else VehicleConfig()
+        self._gc = guidance_config if guidance_config else GuidanceConfig()
+        self._sc = sim_config if sim_config else SimConfig()
+
+    def solve(
+        self,
+        current_state: NavigationState,
+        target_position: Optional[np.ndarray] = None,
+        target_velocity: Optional[np.ndarray] = None,
+        fuel_remaining: Optional[float] = None,
+    ) -> List[TrajectoryPoint]:
+        if target_position is None:
+            target_position = self._gc.target_position
+        if target_velocity is None:
+            target_velocity = self._gc.target_velocity
+
+        kp, kd = 0.5, 2.0
+        pos_err = target_position - current_state.position
+        vel_err = target_velocity - current_state.velocity
+
+        a_req = kp * pos_err + kd * vel_err - self._sc.gravity
+        T_mag = np.linalg.norm(a_req)
+        
+        if T_mag > 1e-12:
+            direction = a_req / T_mag
+        else:
+            direction = np.array([0.0, 0.0, 1.0])
+
+        throttle = np.clip((T_mag * current_state.mass) / self._vc.max_total_thrust, 0.0, 1.0)
+
+        pt = TrajectoryPoint(
+            time=0.0,
+            position=current_state.position.copy(),
+            velocity=current_state.velocity.copy(),
+            acceleration=a_req,
+            thrust_direction=direction,
+            throttle=throttle,
+        )
+        return [pt]
+
+
+# ---------------------------------------------------------------------------
 # Guidance System (runtime wrapper)
 # ---------------------------------------------------------------------------
 
@@ -400,16 +454,24 @@ class GuidanceSystem:
         vehicle_config: Optional[VehicleConfig] = None,
         guidance_config: Optional[GuidanceConfig] = None,
         sim_config: Optional[SimConfig] = None,
+        solver_type: str = "gfold",
     ) -> None:
         self._vc = vehicle_config if vehicle_config else VehicleConfig()
         self._gc = guidance_config if guidance_config else GuidanceConfig()
         self._sc = sim_config if sim_config else SimConfig()
 
-        self.solver = GFOLDSolver(
-            vehicle_config=self._vc,
-            guidance_config=self._gc,
-            sim_config=self._sc,
-        )
+        if solver_type == "proportional":
+            self.solver = ProportionalGuidanceSolver(
+                vehicle_config=self._vc,
+                guidance_config=self._gc,
+                sim_config=self._sc,
+            )
+        else:
+            self.solver = GFOLDSolver(
+                vehicle_config=self._vc,
+                guidance_config=self._gc,
+                sim_config=self._sc,
+            )
 
         self._update_period = 1.0 / self._gc.update_rate_hz
         self._last_solve_time: float = -1e6

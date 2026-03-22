@@ -1,6 +1,4 @@
 """Quick smoke test for the mission management subsystem."""
-import sys
-sys.path.insert(0, r"e:\paper_fsd")
 
 def test_planner():
     from rocket_ai_os.mission.planner import (

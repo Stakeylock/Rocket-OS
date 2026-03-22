@@ -955,13 +955,13 @@ class FullMissionScenario(Scenario):
         """
         self.setup()
         dt = self.sim_config.dt
-        max_time = 200.0  # extended time for full mission
+        max_time = 320.0  # extended time for full mission
         result = ScenarioResult()
         result.events_log.append((0.0, "Scenario start: full mission"))
         result.trajectory_log.append(self.vehicle.state.clone())
 
         t = 0.0
-        log_interval = 0.5  # log every 500 ms (longer mission)
+        log_interval = 0.01  # log every step (dt = 0.01)
         next_log_time = log_interval
         max_dynamic_pressure = 0.0
         max_altitude = 0.0

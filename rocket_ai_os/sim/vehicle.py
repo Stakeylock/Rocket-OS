@@ -120,6 +120,27 @@ class VehicleState:
             is_destroyed=self.is_destroyed,
         )
 
+    def to_12_state_dict(self) -> dict[str, float]:
+        """Return the 12-element kinematic state as a dictionary.
+        
+        Variables: x, y, z, vx, vy, vz, roll, pitch, yaw, p, q, r.
+        Angles are in radians, angular rates in rad/s, positional in m, m/s.
+        """
+        # Convert scalar-first quaternion to scipy scalar-last for rotation formulation
+        # w, x, y, z -> x, y, z, w
+        import scipy.spatial.transform as transform
+        qw, qx, qy, qz = self.attitude
+        r = transform.Rotation.from_quat([qx, qy, qz, qw])
+        euler = r.as_euler('xyz', degrees=False) # roll, pitch, yaw
+        
+        return {
+            "t": self.time,
+            "x": self.position[0], "y": self.position[1], "z": self.position[2],
+            "vx": self.velocity[0], "vy": self.velocity[1], "vz": self.velocity[2],
+            "roll": euler[0], "pitch": euler[1], "yaw": euler[2],
+            "p": self.angular_velocity[0], "q": self.angular_velocity[1], "r": self.angular_velocity[2]
+        }
+
 
 # ---------------------------------------------------------------------------
 # Structural / thermal constraint limits

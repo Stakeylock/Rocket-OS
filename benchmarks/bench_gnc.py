@@ -13,7 +13,7 @@ Outputs:
 """
 
 from __future__ import annotations
-import os, sys, csv
+import os, sys, csv, time
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -114,6 +114,55 @@ def run_gnc_evaluation():
                 "flight_time_s": 0, "is_landed": False, "is_destroyed": True,
                 "trajectory": [],
             })
+
+    return results
+
+
+# =====================================================================
+# 4a  Latency Comparison (G-FOLD vs Proportional)
+# =====================================================================
+def run_latency_comparison():
+    """Evaluate optimization latency of G-FOLD vs Proportional."""
+    print("  Evaluating Guidance Latency...")
+    from rocket_ai_os.gnc.navigation import NavigationState
+    vc = VehicleConfig()
+    gc = GuidanceConfig()
+    sc = SimConfig()
+    
+    # Setup initial state
+    nav_state = NavigationState(
+        position=np.array([1000.0, 500.0, 5000.0]),
+        velocity=np.array([-50.0, -20.0, -150.0]),
+        attitude=np.array([1.0, 0.0, 0.0, 0.0]),
+        angular_rates=np.zeros(3),
+        mass=vc.dry_mass + 10000.0,
+        timestamp=0.0
+    )
+
+    results = []
+    
+    for solver_name in ["proportional", "gfold"]:
+        from rocket_ai_os.gnc.guidance import GuidanceSystem
+        guidance = GuidanceSystem(vehicle_config=vc, guidance_config=gc, sim_config=sc, solver_type=solver_name)
+        
+        # Warm-up run
+        guidance.update(nav_state, 0.0)
+        
+        # Measure
+        latencies = []
+        for i in range(100):
+            nav_state.timestamp = i * 0.1
+            guidance._last_solve_time = -1e6 # force resolve
+            
+            t0 = time.perf_counter()
+            guidance.update(nav_state, nav_state.timestamp)
+            latencies.append((time.perf_counter() - t0) * 1000.0)
+            
+        mean_lat = np.mean(latencies)
+        max_lat = np.max(latencies)
+        p99_lat = np.percentile(latencies, 99)
+        results.append({"Solver": solver_name, "Mean_ms": mean_lat, "Max_ms": max_lat, "P99_ms": p99_lat})
+        print(f"    {solver_name.upper()}: Mean = {mean_lat:.2f} ms | Max = {max_lat:.2f} ms | P99 = {p99_lat:.2f} ms")
 
     return results
 
@@ -226,9 +275,13 @@ def plot_G17(df):
 # =====================================================================
 def main():
     print("=" * 60)
-    print("  STEP 4 — GNC Accuracy Evaluation")
+    print("  STEP 4 — GNC Accuracy & Latency Evaluation")
     print("=" * 60)
 
+    # 1. Latency comparison
+    latency_res = run_latency_comparison()
+
+    # 2. Monte Carlo Accuracy
     results = run_gnc_evaluation()
 
     # Save CSV (without trajectory column)
