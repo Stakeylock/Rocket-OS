@@ -100,31 +100,23 @@ class DecisionModule:
     def evaluate(
         self, action: ControlAction, vehicle_state: dict
     ) -> tuple[bool, str]:
-        import numpy as np
-        import cvxpy as cp
-        pos = np.array(vehicle_state['position'], dtype=np.float64)
-        vel = np.array(vehicle_state['velocity'], dtype=np.float64)
-        att = np.array(vehicle_state['attitude'], dtype=np.float64)
-        omega = np.array(vehicle_state['angular_velocity'], dtype=np.float64)
-        mass = vehicle_state.get('mass', 1000.0)
+        """Evaluate action safety using forward simulation and envelope checking."""
+        snap = _VehicleSnapshot(
+            position=np.array(vehicle_state['position'], dtype=np.float64),
+            velocity=np.array(vehicle_state['velocity'], dtype=np.float64),
+            attitude=np.array(vehicle_state['attitude'], dtype=np.float64),
+            angular_velocity=np.array(vehicle_state['angular_velocity'], dtype=np.float64),
+            mass=vehicle_state.get('mass', 1000.0),
+            timestamp=vehicle_state.get('timestamp', 0.0),
+        )
 
-        max_angle = self.envelope.max_angle_of_attack
-        h_val_pitch = max_angle - abs(att[1])
-        h_val_roll  = max_angle - abs(att[0])
+        # Forward-simulate the trajectory under this action
+        trajectory = self._forward_simulate(snap, action)
 
-        alpha = 1.0 
-        I_approx = mass * 0.5
-        angular_accel = action.torques / I_approx
-        omega_next = omega + angular_accel * self.dt
-        
-        h_dot_pitch_next = -np.sign(att[1]) * omega_next[1] if att[1] != 0 else -abs(omega_next[1])
-        h_dot_roll_next  = -np.sign(att[0]) * omega_next[0] if att[0] != 0 else -abs(omega_next[0])
-        
-        is_pitch_cbf_safe = (h_dot_pitch_next + alpha * h_val_pitch) >= -0.1
-        is_roll_cbf_safe  = (h_dot_roll_next  + alpha * h_val_roll)  >= -0.1
-        
-        if not (is_pitch_cbf_safe and is_roll_cbf_safe):
-            return False, 'CBF constraint violated: Action leads to unsafe set (BRT)'
+        # Check if any point violates the envelope
+        violation = self._check_envelope(trajectory)
+        if violation:
+            return False, violation
 
         return True, ''
 

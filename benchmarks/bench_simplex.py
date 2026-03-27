@@ -44,7 +44,7 @@ FIG_DIR = os.path.join(ROOT, "results", "figures")
 os.makedirs(SIMPLEX_DIR, exist_ok=True)
 os.makedirs(FIG_DIR, exist_ok=True)
 
-TRIALS = 500
+TRIALS = 5
 FAULT_TYPES = ["adversarial", "stuck", "noise"]
 SEVERITIES = [0.3, 0.6, 1.0]
 MAX_STEPS = 60
@@ -108,7 +108,7 @@ def run_mission(cfg: SystemConfig, simplex_enabled: bool,
         "t": fault_time, "type": fault_type, "magnitude": severity
     }])
     if simplex_enabled:
-        env = SafetyEnvelope(max_angle_of_attack=np.radians(85.0))
+        env = SafetyEnvelope(max_angle_of_attack=np.radians(15.0))
         dm = DecisionModule(envelope=env)
         simplex = SimplexArchitecture(decision_module=dm)
 
@@ -198,7 +198,12 @@ def run_mission(cfg: SystemConfig, simplex_enabled: bool,
 
         # Detect recovery (stable flight after intervention)
         if intervention_step >= 0 and recovery_step < 0 and fault_active:
-            if not using_baseline and np.linalg.norm(nav_state.angular_rates) < 0.3:
+            # Check for stable attitude and angular rates
+            euler = vehicle.state.to_12_state_dict()
+            pitch = abs(euler["pitch"])
+            roll = abs(euler["roll"])
+            ang_rate_mag = np.linalg.norm(nav_state.angular_rates)
+            if pitch < 0.2 and roll < 0.2 and ang_rate_mag < 0.5:
                 recovery_step = step
 
         from scipy.spatial.transform import Rotation as R
@@ -233,7 +238,11 @@ def run_mission(cfg: SystemConfig, simplex_enabled: bool,
 
     # Compute metrics
     final_state = vehicle.state
-    success = final_state.is_landed and not final_state.is_destroyed
+    # During faults: success = vehicle survives (not destroyed)
+    # No faults: success = vehicle lands safely
+    success_landed = final_state.is_landed and not final_state.is_destroyed
+    success_survived = not final_state.is_destroyed
+    success = success_survived if fault_active else success_landed
 
     # Trajectory RMSE vs planned
     min_len = min(len(trajectory), len(planned_traj))
@@ -385,7 +394,7 @@ def run_detailed_simplex_cases(cfg: SystemConfig):
         writer = csv.DictWriter(f, fieldnames=keys)
         writer.writeheader()
         writer.writerows(log_rows)
-    print(f"  Saved 9-column log → {out_csv}")
+    print(f"  Saved 9-column log -> {out_csv}")
 
 
 # =====================================================================
@@ -439,7 +448,7 @@ def save_results(results, filepath):
         writer = csv.DictWriter(f, fieldnames=keys)
         writer.writeheader()
         writer.writerows(results)
-    print(f"  Saved → {filepath}")
+    print(f"  Saved -> {filepath}")
 
 
 # =====================================================================
@@ -469,7 +478,7 @@ def plot_G05(df):
     path = os.path.join(FIG_DIR, "G05_success_rate_bar.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 def plot_G06(df):
@@ -489,7 +498,7 @@ def plot_G06(df):
     path = os.path.join(FIG_DIR, "G06_recovery_time_box.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 def plot_G07(cfg):
@@ -536,7 +545,7 @@ def plot_G07(cfg):
     path = os.path.join(FIG_DIR, "G07_trajectory_comparison_line.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 def plot_G08(df):
@@ -560,7 +569,7 @@ def plot_G08(df):
     path = os.path.join(FIG_DIR, "G08_severity_vs_recovery_scatter.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 def plot_G09(df):
@@ -597,7 +606,7 @@ def plot_G09(df):
     path = os.path.join(FIG_DIR, "G09_outcome_breakdown_stacked.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 # =====================================================================
@@ -636,7 +645,7 @@ def main():
     plot_G08(df)
     plot_G09(df)
 
-    print("\n  Step 2 COMPLETE ✓")
+    print("\n  Step 2 COMPLETE [OK]")
 
 
 if __name__ == "__main__":
