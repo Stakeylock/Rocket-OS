@@ -67,11 +67,11 @@ test_mission_smoke.py    # Smoke tests for mission management subsystem
 
 ```bash
 # Clone the repository
-git clone <repo-url>
-cd paper_fsd
+git clone https://github.com/your-username/Rocket-OS.git
+cd Rocket-OS
 
 # Install dependencies
-pip install numpy
+pip install -r requirements.txt
 ```
 
 ## Usage
