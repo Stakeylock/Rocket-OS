@@ -178,16 +178,27 @@ def run_mission(cfg: SystemConfig, simplex_enabled: bool,
             if not using_baseline and np.linalg.norm(nav_state.angular_rates) < 0.3:
                 recovery_step = step
 
+        from scipy.spatial.transform import Rotation as R
+
         # Apply thrust
         thrust_mag = throttle * cfg.vehicle.max_total_thrust
         thrust_mag = np.clip(thrust_mag, 0, cfg.vehicle.max_total_thrust)
-        thrust_dir = np.array([0.0, 0.0, 1.0])  # simplified
-        f_thrust = thrust_dir * thrust_mag
+        
+        # Calculate thrust in body frame (Z-axis)
+        thrust_body = np.array([0.0, 0.0, thrust_mag])
+        
+        # Rotate thrust into inertial frame
+        qw, qx, qy, qz = state.attitude
+        attitude_rot = R.from_quat([qx, qy, qz, qw])
+        f_thrust = attitude_rot.apply(thrust_body)
+        
         f_gravity = np.array([0.0, 0.0, -9.81 * state.mass])
         total_force = f_gravity + f_thrust
 
-        # Torque effect on angular velocity (simplified)
-        total_torque = torque * 0.001  # scale down for stability
+        # Controller outputs torque in body frame, but apply_forces expects inertial.
+        # Rotate body torque to inertial frame
+        torque_inertial = attitude_rot.apply(torque)
+        total_torque = torque_inertial * 0.001  # scale down for stability
 
         vehicle.apply_forces(total_force, total_torque, dt)
         g0 = 9.81; isp = 282.0
@@ -332,9 +343,17 @@ def run_detailed_simplex_cases(cfg: SystemConfig):
             throttle = np.linalg.norm(approved.forces) / cfg.vehicle.max_total_thrust
             torque = approved.torques
             
-            f_thrust = np.array([0.0, 0.0, throttle * cfg.vehicle.max_total_thrust])
+            from scipy.spatial.transform import Rotation as R
+            qw, qx, qy, qz = vehicle.state.attitude
+            attitude_rot = R.from_quat([qx, qy, qz, qw])
+            
+            thrust_body = np.array([0.0, 0.0, throttle * cfg.vehicle.max_total_thrust])
+            f_thrust = attitude_rot.apply(thrust_body)
+            
             f_gravity = np.array([0.0, 0.0, -9.81 * vehicle.state.mass])
-            vehicle.apply_forces(f_gravity + f_thrust, torque * 0.001, dt)
+            
+            torque_inertial = attitude_rot.apply(torque)
+            vehicle.apply_forces(f_gravity + f_thrust, torque_inertial * 0.001, dt)
             
     # Save CSV
     out_csv = os.path.join(SIMPLEX_DIR, "simplex_log.csv")

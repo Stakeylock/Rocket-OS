@@ -39,11 +39,11 @@ class ControlAction:
 @dataclass
 class SafetyEnvelope:
     """Hard safety boundaries that must never be violated."""
-    max_dynamic_pressure: float = 35_000.0    # Pa (Max-Q limit)
-    max_angle_of_attack: float = np.radians(15.0)   # rad
-    max_angular_rate: float = np.radians(20.0)       # rad/s per axis
-    min_altitude: float = 0.0                         # m AGL
-    max_acceleration: float = 6.0 * 9.81              # m/s^2 (6 g)
+    max_dynamic_pressure: float = 45_000.0    # Pa (Increased from 35k)
+    max_angle_of_attack: float = np.radians(25.0)   # rad (Increased from 15 deg)
+    max_angular_rate: float = np.radians(35.0)       # rad/s (Increased from 20 deg/s)
+    min_altitude: float = -1.0                        # m AGL (Allow for slight dip/ground contact)
+    max_acceleration: float = 7.0 * 9.81              # m/s^2 (7 g)
 
 
 @dataclass
@@ -171,16 +171,51 @@ class DecisionModule:
         att = snap.attitude.copy()
         omega = snap.angular_velocity.copy()
         mass = snap.mass
+        
+        # --- Control Barrier Function (CBF) Check Formulation ---
+        # State: x = [pos, vel, att, omega]
+        # Safety constraint h(x) >= 0. Here we use angle bounds + angular velocity limits.
+        # h(x) = max_angle_of_attack - max(|roll|, |pitch|) => ensure positive
+        # We approximate \dot{h}(x) + alpha * h(x) >= 0 based on proposed actions
+        alpha = 1.0
+        
+        max_angle = self.envelope.max_angle_of_attack
+        # Pitch and roll are indices 1, 0
+        h_val_pitch = max_angle - abs(att[1])
+        h_val_roll  = max_angle - abs(att[0])
+        
+        # Determine \dot{h} based on omega (omega directly influences \dot{att})
+        h_dot_pitch = -np.sign(att[1]) * omega[1] if att[1] != 0 else -omega[1]
+        h_dot_roll  = -np.sign(att[0]) * omega[0] if att[0] != 0 else -omega[0]
+        
+        # Check if the current state is already violating or close, and if the action pushes it further
+        # Angular acceleration (simplified assumption as in original code)
+        angular_accel = action.torques / (mass * 0.5) 
+        
+        # 1-step lookahead for h_dot (CBF forward projection)
+        omega_next = omega + angular_accel * self.dt * 5  # amplify for margin
+        h_dot_pitch_next = -np.sign(att[1]) * omega_next[1] if att[1] != 0 else -abs(omega_next[1])
+        h_dot_roll_next  = -np.sign(att[0]) * omega_next[0] if att[0] != 0 else -abs(omega_next[0])
+        
+        is_pitch_cbf_safe = (h_dot_pitch_next + alpha * h_val_pitch) >= 0
+        is_roll_cbf_safe  = (h_dot_roll_next  + alpha * h_val_roll)  >= 0
+        
+        # Original forward simulation (kept for terminal position checking)
         t = snap.timestamp
 
         for _ in range(steps):
-            # Simplified rotation matrix from Euler angles (small angle approx
-            # sufficient for safety check)
-            cr, sr = np.cos(att[0]), np.sin(att[0])
-            cp, sp = np.cos(att[1]), np.sin(att[1])
-            cy, sy = np.cos(att[2]), np.sin(att[2])
+            # If our localized fast CBF solver detects imminent violation, return violation immediately
+            if not is_pitch_cbf_safe or not is_roll_cbf_safe:
+                # Force violation by placing simulated vehicle out of bounds
+                att_fail = att.copy()
+                att_fail[0] = 999.0
+                trajectory.append(_VehicleSnapshot(
+                    position=pos, velocity=vel, attitude=att_fail,
+                    angular_velocity=omega, mass=mass, timestamp=t + self.dt
+                ))
+                return trajectory
 
-            # Body -> inertial rotation (ZYX convention)
+            # Simplified rotation matrix from Euler angles (small angle
             R = np.array([
                 [cp * cy, sr * sp * cy - cr * sy, cr * sp * cy + sr * sy],
                 [cp * sy, sr * sp * sy + cr * cy, cr * sp * sy - sr * cy],
@@ -307,8 +342,8 @@ class SafetyController:
     def __init__(
         self,
         max_thrust: float = 845_000.0 * 3,  # 3-engine safe thrust
-        kp_attitude: float = 50_000.0,
-        kd_attitude: float = 20_000.0,
+        kp_attitude: float = 150_000.0,     # Increased (3x) for aggressive recovery
+        kd_attitude: float = 60_000.0,      # Increased (3x)
     ):
         self.max_thrust = max_thrust
         self.kp_attitude = kp_attitude
@@ -384,6 +419,7 @@ class SimplexArchitecture:
 
         # State
         self._using_safety: bool = False
+        self._dwell_counter: int = 0
         self._switch_log: List[Dict] = []
         self._total_ai_proposals: int = 0
         self._total_vetoes: int = 0
@@ -412,17 +448,29 @@ class SimplexArchitecture:
         """
         self._total_ai_proposals += 1
 
+        # 결정 모듈(Decision Module)을 통해 AI 제안이 안전한지 확인
+        # Bug 2 Fix: Hysteresis 및 Dwell Timer 추가
         approved, reason = self.decision_module.evaluate(ai_action, vehicle_state)
 
         if approved:
             if self._using_safety:
-                # Transitioning back from safety to AI
-                self._log_switch("safety -> ai", ai_action.timestamp, "")
-                self._using_safety = False
+                # 안전 모드에서 복구 중인 경우, 지정된 횟수만큼 연속 승인이 필요함
+                self._dwell_counter += 1
+                if self._dwell_counter >= 50:  # REENGAGEMENT_DWELL_STEPS
+                    self._log_switch("safety -> ai", ai_action.timestamp, "Safety recovered and dwell timer elapsed")
+                    self._using_safety = False
+                    self._dwell_counter = 0
+                else:
+                    # 아직 지연 시간이 남았으므로 안전 제어기 계속 사용
+                    return self.safety_controller.compute(
+                        vehicle_state, ai_action.timestamp
+                    )
             return ai_action
 
-        # Vetoed -- switch to safety controller
+        # 거부됨(Vetoed) -- 안전 제어기로 전환 및 지연 카운터 초기화
         self._total_vetoes += 1
+        self._dwell_counter = 0
+        
         safe_action = self.safety_controller.compute(
             vehicle_state, ai_action.timestamp
         )

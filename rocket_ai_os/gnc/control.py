@@ -29,6 +29,7 @@ References:
 from __future__ import annotations
 
 import numpy as np
+import scipy.linalg
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
@@ -62,7 +63,53 @@ def _quat_error(q_current: np.ndarray, q_desired: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# PID Controller
+# Discrete LQR Controller
+# ---------------------------------------------------------------------------   
+
+class DiscreteLQR:
+    """Discrete-time Linear Quadratic Regulator for optimal baseline tracking. 
+    
+    Replaces rudimentary PID logic to allow mathematically optimal trajectory
+    tracking over the baseline dynamics.
+    
+    Args:
+        A: Linearized state transition matrix (n, n)
+        B: Linearized control input matrix (n, m)
+        Q: State cost matrix (n, n)
+        R: Control cost matrix (m, m)
+    """
+
+    def __init__(
+        self,
+        A: np.ndarray,
+        B: np.ndarray,
+        Q: np.ndarray,
+        R: np.ndarray,
+    ) -> None:
+        self.A = np.asarray(A)
+        self.B = np.asarray(B)
+        self.Q = np.asarray(Q)
+        self.R = np.asarray(R)
+        
+        # solve discrete algebraic Riccati equation
+        self.P = scipy.linalg.solve_discrete_are(self.A, self.B, self.Q, self.R)
+        # Compute optimal gain matrix K
+        # K = (R + B^T P B)^-1 (B^T P A)
+        bpb = self.B.T @ self.P @ self.B
+        bpa = self.B.T @ self.P @ self.A
+        self.K = np.linalg.inv(self.R + bpb) @ bpa
+
+    def compute(self, x_err: np.ndarray) -> np.ndarray:
+        """Compute LQR control given the state error (x_desired - x_current).
+        Since we want u to drive x towards the origin of the error space, 
+        u = K * x_err.
+        """
+        # Original LQR formulation solves u = -Kx for moving a state to zero.
+        # So we pass in error = state_desired - state_current 
+        # meaning state_err needs to be driven to zero by applying K * err
+        return self.K @ x_err
+
+# ---------------------------------------------------------------------------   
 # ---------------------------------------------------------------------------
 
 class PIDController:
@@ -410,35 +457,28 @@ class FlightController:
         self._sc = sim_config if sim_config else SimConfig()
         dt = self._sc.dt
 
-        # --- Attitude PID (operates on quaternion error vector) ---
-        self.attitude_pid = PIDController(
-            kp=np.array([800.0, 800.0, 200.0]),
-            ki=np.array([10.0, 10.0, 5.0]),
-            kd=np.array([400.0, 400.0, 100.0]),
-            windup_limit=30.0,
-            output_limit=80.0,
-            dt=dt,
-        )
+        # --- Attitude LQR Baseline (Replaces PID) ---
+        # A simple double-integrator plant for attitude dynamics
+        # state: [theta, theta_dot], control: [torque]
+        # Very simplified decoupled baseline model for LQR derivation
+        dt_lqr = dt
+        A_1d = np.array([[1.0, dt_lqr], [0.0, 1.0]])
+        # I ~ mass * 0.5 roughly, assume 1.0 for normalized design
+        B_1d = np.array([[0.5 * dt_lqr**2], [dt_lqr]]) 
+        Q_1d = np.diag([800.0, 50.0])
+        R_1d = np.array([[1.0]])
+        
+        self.attitude_lqr = DiscreteLQR(A_1d, B_1d, Q_1d, R_1d)
 
-        # --- Rate damping PID ---
-        self.rate_pid = PIDController(
-            kp=np.array([200.0, 200.0, 50.0]),
-            ki=np.array([0.0, 0.0, 0.0]),
-            kd=np.array([50.0, 50.0, 20.0]),
-            windup_limit=10.0,
-            output_limit=40.0,
-            dt=dt,
-        )
+        # Build 3-axis decoupled LQR (we can compute per-axis or apply the 1D LQR sequentially)
+        # We will apply the 1D LQR to each axis (Roll, Pitch, Yaw)
 
-        # --- Position / velocity PID for throttle correction ---
-        self.pos_pid = PIDController(
-            kp=np.array([2.0, 2.0, 5.0]),
-            ki=np.array([0.1, 0.1, 0.5]),
-            kd=np.array([4.0, 4.0, 8.0]),
-            windup_limit=5.0,
-            output_limit=10.0,
-            dt=dt,
-        )
+        # --- Position / velocity LQR (replaces throttle PID) ---
+        A_pos = np.array([[1.0, dt_lqr], [0.0, 1.0]])
+        B_pos = np.array([[0.5 * dt_lqr**2], [dt_lqr]])
+        Q_pos = np.diag([2.0, 4.0])
+        R_pos = np.array([[10.0]])
+        self.pos_lqr = DiscreteLQR(A_pos, B_pos, Q_pos, R_pos)
 
         # --- RL adaptive controller ---
         self.rl_controller = RLAdaptiveController(
@@ -517,23 +557,27 @@ class FlightController:
         # 1. Attitude error (quaternion error -> vector part is ~half-angle)
         q_err = _quat_error(nav_state.attitude, self._desired_attitude)
         att_err_vec = q_err[1:4]  # vector part ~ rotation error (small angle)
-
-        # 2. PID attitude torque
-        pid_torque = self.attitude_pid.compute(att_err_vec)
-
-        # 3. Rate damping (desired rate = 0 for landing)
-        rate_err = nav_state.angular_rates  # desired angular rate is zero
-        rate_torque = self.rate_pid.compute(-rate_err)
-        pid_torque = pid_torque + rate_torque
-
-        # 4. Position / velocity tracking -> throttle correction
+        
+        # 2. LQR attitude torque + rate damping combined
+        pid_torque = np.zeros(3)
+        rate_err = nav_state.angular_rates
+        for i in range(3):
+            # State vector driving to 0
+            state_err = np.array([att_err_vec[i], rate_err[i]])
+            pid_torque[i] = -self.attitude_lqr.compute(state_err)[0]
+            
+        # 4. Position / velocity LQR -> throttle correction
         pos_err = self._desired_position - nav_state.position
         vel_err = self._desired_velocity - nav_state.velocity
-        combined_err = 0.5 * pos_err + 0.5 * vel_err
-        pid_throttle_correction_vec = self.pos_pid.compute(combined_err)
-        # Map 3D correction to scalar throttle delta (vertical channel)
+        
+        state_err_pos_z = np.array([pos_err[2], vel_err[2]])
+        # Negative because we computed pos_err = desired - current, 
+        # so LQR(x) expects current state relative to target = current - desired = -err
+        pid_throttle_correction_z = self.pos_lqr.compute(-state_err_pos_z)[0]
+        
+        # Map correction to scalar throttle delta 
         pid_throttle_delta = float(np.clip(
-            pid_throttle_correction_vec[2] * 0.01, -0.2, 0.2,
+            pid_throttle_correction_z * 0.01, -0.2, 0.2,
         ))
 
         # 5. RL adaptive corrections

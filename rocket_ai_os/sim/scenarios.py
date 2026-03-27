@@ -56,6 +56,7 @@ class ScenarioResult:
     trajectory_log: List[VehicleState] = field(default_factory=list)
     events_log: List[Tuple[float, str]] = field(default_factory=list)
     metrics: Dict[str, Any] = field(default_factory=dict)
+    failure_reason: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -257,12 +258,19 @@ class NominalLandingScenario(Scenario):
             )
 
             # --- Fuel consumption ---
+            # Bug 1: Check fuel exhaustion as a termination condition
             thrust_mag = np.linalg.norm(f_thrust)
             g0 = 9.81
             isp = 282.0  # sea-level default
             if thrust_mag > 0:
                 mass_flow = thrust_mag / (isp * g0)
                 self.vehicle.consume_fuel(mass_flow, dt)
+                
+            if state.fuel_mass <= 0 and not state.is_landed and not state.is_destroyed:
+                # Hovering or flying without fuel = failure
+                result.events_log.append((t, "CRITICAL: Fuel exhausted"))
+                result.failure_reason = "fuel_exhausted"
+                break
 
             # --- Total force and torque ---
             total_force = f_gravity + f_aero + f_thrust
@@ -322,6 +330,7 @@ class NominalLandingScenario(Scenario):
             "flight_time_s": flight_time,
             "is_landed": final.is_landed,
             "is_destroyed": final.is_destroyed,
+            "failure_reason": result.failure_reason or ("timeout" if result.trajectory_log[-1].time >= self.sim_config.max_time - 0.1 else "success" if final.is_landed else "crash"),
         }
 
         result.success = (
@@ -462,12 +471,18 @@ class EngineOutScenario(Scenario):
                     f_thrust = f_thrust / f_mag * max_available
 
             # --- Fuel consumption ---
+            # Bug 1: Check fuel exhaustion as a termination condition
             thrust_mag = np.linalg.norm(f_thrust)
             g0 = 9.81
             isp = 282.0
             if thrust_mag > 0:
                 mass_flow = thrust_mag / (isp * g0)
                 self.vehicle.consume_fuel(mass_flow, dt)
+
+            if state.fuel_mass <= 0 and not state.is_landed and not state.is_destroyed:
+                result.events_log.append((t, "CRITICAL: Fuel exhausted"))
+                result.failure_reason = "fuel_exhausted"
+                break
 
             # --- Integrate ---
             total_force = f_gravity + f_aero + f_thrust
@@ -516,6 +531,7 @@ class EngineOutScenario(Scenario):
             "flight_time_s": flight_time,
             "is_landed": final.is_landed,
             "is_destroyed": final.is_destroyed,
+            "failure_reason": result.failure_reason or ("timeout" if final.time >= self.sim_config.max_time - 0.1 else "success" if final.is_landed else "crash"),
             "engines_failed": self.failed_engine_ids,
             "engines_remaining": self._num_active_engines,
             "fault_injection_time_s": self.failure_time,
@@ -671,12 +687,18 @@ class SensorDegradationScenario(Scenario):
             self.vehicle.state.velocity = true_vel
 
             # --- Fuel consumption ---
+            # Bug 1: Check fuel exhaustion as a termination condition
             thrust_mag = np.linalg.norm(f_thrust)
             g0 = 9.81
             isp = 282.0
             if thrust_mag > 0:
                 mass_flow = thrust_mag / (isp * g0)
                 self.vehicle.consume_fuel(mass_flow, dt)
+                
+            if state.fuel_mass <= 0 and not state.is_landed and not state.is_destroyed:
+                result.events_log.append((t, "CRITICAL: Fuel exhausted"))
+                result.failure_reason = "fuel_exhausted"
+                break
 
             # --- Integrate (uses true dynamics) ---
             total_force = f_gravity + f_aero + f_thrust
@@ -717,6 +739,7 @@ class SensorDegradationScenario(Scenario):
             "flight_time_s": final.time,
             "is_landed": final.is_landed,
             "is_destroyed": final.is_destroyed,
+            "failure_reason": result.failure_reason or ("timeout" if final.time >= self.sim_config.max_time - 0.1 else "success" if final.is_landed else "crash"),
             "max_nav_error_m": getattr(self, "_max_nav_error", 0.0),
             "gps_dropout_time_s": self.gps_dropout_time,
             "imu_drift_rate_m_s2_per_s": self.imu_drift_rate,
@@ -1015,19 +1038,23 @@ class FullMissionScenario(Scenario):
                 f_thrust *= osc
 
             # --- Fuel consumption ---
+            # Bug 1: Check fuel exhaustion as a termination condition
             thrust_mag = np.linalg.norm(f_thrust)
             g0 = 9.81
             isp = 282.0 + 29.0 * min(alt / 80_000.0, 1.0)  # altitude-dependent ISP
             if thrust_mag > 0:
                 mass_flow = thrust_mag / (isp * g0)
                 consumed = self.vehicle.consume_fuel(mass_flow, dt)
+                
                 if state.fuel_mass <= 0 and state.phase not in {
                     MissionPhase.COAST,
                     MissionPhase.AERODYNAMIC_DESCENT,
                     MissionPhase.LANDED,
                 }:
-                    result.events_log.append((t, "WARNING: fuel exhausted"))
+                    result.events_log.append((t, "CRITICAL: Fuel exhausted"))
+                    result.failure_reason = "fuel_exhausted"
                     f_thrust = np.zeros(3)
+                    break
 
             # --- Integrate ---
             total_force = f_gravity + f_aero + f_thrust
@@ -1072,6 +1099,7 @@ class FullMissionScenario(Scenario):
             "flight_time_s": final.time,
             "is_landed": final.is_landed,
             "is_destroyed": final.is_destroyed,
+            "failure_reason": result.failure_reason or ("timeout" if final.time >= 320.0 - 0.1 else "success" if final.is_landed else "crash"),
             "max_dynamic_pressure_pa": getattr(self, "_max_dynamic_pressure", 0.0),
             "max_altitude_m": getattr(self, "_max_altitude", 0.0),
             "phases_visited": [p.name for p in phases_visited],

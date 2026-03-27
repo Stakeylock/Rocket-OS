@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  rocket_os_sim:
+    build: .
+    container_name: rocket_os_sim
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: ["python3", "benchmarks/bench_simplex.py"]

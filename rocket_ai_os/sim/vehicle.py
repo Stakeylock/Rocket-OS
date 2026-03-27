@@ -196,6 +196,11 @@ class Vehicle:
         self._inertia = self.config.moment_of_inertia.copy()
         self._inertia_inv = np.linalg.inv(self._inertia)
 
+        # Actuator lag tracking
+        self._actual_force = np.zeros(3)
+        self._actual_torque = np.zeros(3)
+        self._gimbal_tau = 0.1  # 100ms first-order lag for gimbal and throttle
+
     # ------------------------------------------------------------------
     # Initialisation helpers
     # ------------------------------------------------------------------
@@ -271,9 +276,17 @@ class Vehicle:
         force = np.asarray(force, dtype=np.float64)
         torque = np.asarray(torque, dtype=np.float64)
 
+        # Apply PT1 lag to simulate actuator response times
+        self._actual_force += (force - self._actual_force) * (dt / self._gimbal_tau)
+        self._actual_torque += (torque - self._actual_torque) * (dt / self._gimbal_tau)
+        
+        # Override force and torque with their lagged versions for integration
+        eff_force = self._actual_force.copy()
+        eff_torque = self._actual_torque.copy()
+
         # --- translational dynamics ---
         mass = max(self.state.mass, 1.0)  # guard against zero mass
-        acceleration = force / mass
+        acceleration = eff_force / mass
 
         # Semi-implicit Euler: velocity first, then position
         self.state.velocity += acceleration * dt
@@ -283,7 +296,7 @@ class Vehicle:
         # Rotate torque from inertial to body frame
         C_bn = _quat_to_dcm(self.state.attitude)        # body-from-inertial
         C_nb = C_bn.T                                     # inertial-from-body
-        torque_body = C_nb @ torque
+        torque_body = C_nb @ eff_torque
 
         # Euler's rotation equation: I * omega_dot = tau - omega x (I * omega)
         omega = self.state.angular_velocity
@@ -312,19 +325,32 @@ class Vehicle:
         )
 
         # --- ground contact ---
-        if self.state.position[2] <= 0.0:
-            self.state.position[2] = 0.0
+        # Bug 1 Fix: Use robust thresholds for landing detection.
+        # Check altitude against 10cm tolerance to avoid floating point misses.
+        altitude = self.state.position[2]
+        if altitude <= 0.10: 
+            # Snap to ground if very close
+            if altitude < 0.0:
+                self.state.position[2] = 0.0
+            
             speed = np.linalg.norm(self.state.velocity)
             vertical_speed = abs(self.state.velocity[2])
+            
+            # Compute tilt angle (angle between body Z and inertial Z)
+            # _quat_to_dcm returns the rotation from body to inertial frame.
+            C_nb = _quat_to_dcm(self.state.attitude)
+            body_z_inertial = C_nb[:, 2]
+            cosine_tilt = np.clip(body_z_inertial[2], -1.0, 1.0)
+            tilt_deg = np.degrees(np.arccos(cosine_tilt))
 
-            if vertical_speed < 5.0 and speed < 10.0:
-                # Successful soft landing
+            # Landed if soft touchdown and upright (Bug 1: robust thresholds)
+            if vertical_speed < 2.0 and speed < 3.0 and tilt_deg < 15.0:
                 self.state.velocity = np.zeros(3)
                 self.state.angular_velocity = np.zeros(3)
                 self.state.is_landed = True
                 self.state.phase = MissionPhase.LANDED
-            else:
-                # Hard impact -- vehicle destroyed
+            elif altitude <= 0.0:
+                # Hard impact -- vehicle destroyed if hitting zero without landing criteria
                 self.state.velocity = np.zeros(3)
                 self.state.angular_velocity = np.zeros(3)
                 self.state.is_destroyed = True
