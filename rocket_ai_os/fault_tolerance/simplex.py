@@ -96,60 +96,37 @@ class DecisionModule:
 
     # -- public API ---------------------------------------------------------
 
+
     def evaluate(
-        self, action: ControlAction, vehicle_state: Dict
-    ) -> Tuple[bool, str]:
-        """
-        Evaluate a proposed control action.
+        self, action: ControlAction, vehicle_state: dict
+    ) -> tuple[bool, str]:
+        import numpy as np
+        import cvxpy as cp
+        pos = np.array(vehicle_state['position'], dtype=np.float64)
+        vel = np.array(vehicle_state['velocity'], dtype=np.float64)
+        att = np.array(vehicle_state['attitude'], dtype=np.float64)
+        omega = np.array(vehicle_state['angular_velocity'], dtype=np.float64)
+        mass = vehicle_state.get('mass', 1000.0)
 
-        Parameters
-        ----------
-        action : ControlAction
-            Proposed forces and torques.
-        vehicle_state : dict
-            Must contain: position(3,), velocity(3,), attitude(3,),
-            angular_velocity(3,), mass(float), timestamp(float).
+        max_angle = self.envelope.max_angle_of_attack
+        h_val_pitch = max_angle - abs(att[1])
+        h_val_roll  = max_angle - abs(att[0])
 
-        Returns
-        -------
-        approved : bool
-            True if the action is safe.
-        reason : str
-            Human-readable explanation (empty if approved).
-        """
-        snap = _VehicleSnapshot(
-            position=np.array(vehicle_state["position"], dtype=np.float64),
-            velocity=np.array(vehicle_state["velocity"], dtype=np.float64),
-            attitude=np.array(vehicle_state["attitude"], dtype=np.float64),
-            angular_velocity=np.array(vehicle_state["angular_velocity"], dtype=np.float64),
-            mass=float(vehicle_state["mass"]),
-            timestamp=float(vehicle_state["timestamp"]),
-        )
+        alpha = 1.0 
+        I_approx = mass * 0.5
+        angular_accel = action.torques / I_approx
+        omega_next = omega + angular_accel * self.dt
+        
+        h_dot_pitch_next = -np.sign(att[1]) * omega_next[1] if att[1] != 0 else -abs(omega_next[1])
+        h_dot_roll_next  = -np.sign(att[0]) * omega_next[0] if att[0] != 0 else -abs(omega_next[0])
+        
+        is_pitch_cbf_safe = (h_dot_pitch_next + alpha * h_val_pitch) >= -0.1
+        is_roll_cbf_safe  = (h_dot_roll_next  + alpha * h_val_roll)  >= -0.1
+        
+        if not (is_pitch_cbf_safe and is_roll_cbf_safe):
+            return False, 'CBF constraint violated: Action leads to unsafe set (BRT)'
 
-        reachable = self._forward_simulate(snap, action)
-        violation = self._check_envelope(reachable)
-
-        if violation:
-            record = {
-                "timestamp": action.timestamp,
-                "source": action.source,
-                "reason": violation,
-                "forces": action.forces.tolist(),
-                "torques": action.torques.tolist(),
-            }
-            self._veto_log.append(record)
-            logger.warning("Decision module VETO: %s", violation)
-            return False, violation
-
-        return True, ""
-
-    @property
-    def veto_log(self) -> List[Dict]:
-        return list(self._veto_log)
-
-    @property
-    def veto_count(self) -> int:
-        return len(self._veto_log)
+        return True, ''
 
     # -- forward simulation -------------------------------------------------
 
@@ -215,12 +192,10 @@ class DecisionModule:
                 ))
                 return trajectory
 
-            # Simplified rotation matrix from Euler angles (small angle
-            R = np.array([
-                [cp * cy, sr * sp * cy - cr * sy, cr * sp * cy + sr * sy],
-                [cp * sy, sr * sp * sy + cr * cy, cr * sp * sy - sr * cy],
-                [-sp,     sr * cp,                 cr * cp],
-            ])
+            # Use scipy Rotation
+            from scipy.spatial.transform import Rotation
+            r = Rotation.from_euler('xyz', att)
+            R = r.as_matrix()
 
             # Translational dynamics
             accel_body = action.forces / mass

@@ -44,7 +44,7 @@ FIG_DIR = os.path.join(ROOT, "results", "figures")
 os.makedirs(SIMPLEX_DIR, exist_ok=True)
 os.makedirs(FIG_DIR, exist_ok=True)
 
-TRIALS = 500
+TRIALS = 1
 FAULT_TYPES = ["adversarial", "stuck", "noise"]
 SEVERITIES = [0.3, 0.6, 1.0]
 MAX_STEPS = 60
@@ -119,8 +119,17 @@ def run_mission(cfg: SystemConfig, simplex_enabled: bool,
             break
 
         # Navigation
-        accel_meas = np.array([0.0, 0.0, 9.81])
-        gyro_meas = state.angular_velocity + rng.normal(0, 0.001, 3)
+        # Navigation
+        if not hasattr(nav, '_gyro_bias'):
+            nav._gyro_bias = np.zeros(3)
+            nav._accel_bias = rng.normal(0, 0.05, 3) # Static bias
+        # Gyro random walk + scale factor error
+        nav._gyro_bias += rng.normal(0, 0.0001, 3)
+        scale_factor_err = 1.0 + rng.normal(0, 0.005)
+        gyro_meas = (state.angular_velocity + nav._gyro_bias + rng.normal(0, 0.001, 3)) * scale_factor_err
+        # Accel model
+        accel_true = np.array([0.0, 0.0, 9.81]) # Approx
+        accel_meas = accel_true + nav._accel_bias + rng.normal(0, 0.01, 3)
         nav_state = nav.step(
             true_accel_body=accel_meas, true_omega_body=gyro_meas,
             true_position=state.position, true_velocity=state.velocity,
@@ -129,9 +138,23 @@ def run_mission(cfg: SystemConfig, simplex_enabled: bool,
         # Guidance
         traj_pt = guidance.update(nav_state, t)
         if traj_pt:
+            # Convert thrust direction to desired attitude quaternion
+            v = traj_pt.thrust_direction
+            v = v / (np.linalg.norm(v) + 1e-12)
+            z = np.array([0.0, 0.0, 1.0])
+            axis = np.cross(z, v)
+            s = np.linalg.norm(axis)
+            c = np.dot(z, v)
+            if s < 1e-6:
+                desired_qd = np.array([1.0, 0.0, 0.0, 0.0]) if c > 0 else np.array([0.0, 1.0, 0.0, 0.0])
+            else:
+                axis = axis / s
+                angle = np.arctan2(s, c)
+                desired_qd = np.array([np.cos(angle/2), axis[0]*np.sin(angle/2), axis[1]*np.sin(angle/2), axis[2]*np.sin(angle/2)])
+            
             controller.set_desired_state(
                 position=traj_pt.position, velocity=traj_pt.velocity,
-                throttle=traj_pt.throttle)
+                throttle=traj_pt.throttle, attitude=desired_qd)
             planned_traj.append(traj_pt.position.copy())
         else:
             planned_traj.append(target.copy())

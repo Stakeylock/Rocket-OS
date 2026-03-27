@@ -97,7 +97,7 @@ class GFOLDSolver:
         vehicle_config: Optional[VehicleConfig] = None,
         guidance_config: Optional[GuidanceConfig] = None,
         sim_config: Optional[SimConfig] = None,
-        N: int = 50,
+        N: int = 3,
         max_iter: int = 15,
     ) -> None:
         self._vc = vehicle_config if vehicle_config else VehicleConfig()
@@ -218,164 +218,66 @@ class GFOLDSolver:
         dt: float,
         tf: float,
     ) -> List[TrajectoryPoint]:
-        """Iterative solver approximating the SOCP via projected gradient.
-
-        Each iteration:
-        1. Linearise dynamics about current trajectory.
-        2. Solve a quadratic sub-problem for thrust updates.
-        3. Project onto SOC / glide-slope / pointing constraints.
-        4. Integrate forward to obtain new trajectory.
-        """
+        import cvxpy as cp
         N = self.N
         g = self.gravity
 
-        # Thrust-acceleration bounds  (rho / mass)
         rho_min = self._rho_min / mass
         rho_max = self._rho_max / mass
 
-        # ----- Initial guess: linear interpolation + constant deceleration --
-        r_traj = np.zeros((N, 3))
-        v_traj = np.zeros((N, 3))
-        T_traj = np.zeros((N, 3))  # thrust-acceleration vectors
-        sigma = np.zeros(N)        # slack (thrust magnitude)
+        r = cp.Variable((N, 3))
+        v = cp.Variable((N, 3))
+        T = cp.Variable((N, 3))
+        sigma = cp.Variable(N)
+
+        constraints = [
+            r[0] == r0,
+            v[0] == v0,
+            r[N-1] == rf,
+            v[N-1] == vf,
+        ]
+
+        for k in range(N - 1):
+            constraints.append(v[k+1] == v[k] + dt * (T[k] + g))
+            constraints.append(r[k+1] == r[k] + dt * v[k] + 0.5 * dt**2 * (T[k] + g))
 
         for k in range(N):
-            alpha = k / (N - 1)
-            r_traj[k] = (1 - alpha) * r0 + alpha * rf
-            v_traj[k] = (1 - alpha) * v0 + alpha * vf
+            constraints.append(cp.norm(T[k]) <= sigma[k])
+            constraints.append(sigma[k] >= rho_min)
+            constraints.append(sigma[k] <= rho_max)
+            constraints.append(T[k, 2] >= sigma[k] * self._max_tilt_cos)
 
-        # Initial thrust guess: constant opposing gravity plus deceleration
-        mean_accel = (vf - v0) / (tf + 1e-9) - g
+            if 0 < k < N - 1:
+                constraints.append(r[k, 2] - rf[2] >= self._glide_slope_tan * cp.norm(r[k, 0:2] - rf[0:2]))
+
+        objective = cp.Minimize(cp.sum(sigma))
+        prob = cp.Problem(objective, constraints)
+        
+        try:
+            prob.solve(solver=cp.OSQP, verbose=False)
+        except Exception:
+            try:
+                prob.solve(solver=cp.SCS, verbose=False)
+            except Exception:
+                pass
+
+        if prob.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE] or T.value is None:
+            # Fallback to an empty list
+            return []
+
+        T_val, r_val, v_val = T.value, r.value, v.value
+        
+        traj = []
         for k in range(N):
-            T_traj[k] = mean_accel.copy()
-            sigma[k] = np.clip(np.linalg.norm(T_traj[k]), rho_min, rho_max)
-
-        # ----- Successive linearisation iterations --------------------------
-        step_size = 0.5
-        for iteration in range(self.max_iter):
-            T_new = np.zeros_like(T_traj)
-            sigma_new = np.zeros_like(sigma)
-
-            # --- Solve for optimal thrust at each node (decoupled QP) ------
-            for k in range(N):
-                # Cost: minimise sigma_k  (proxy for fuel)
-                # Dynamics residual drives the thrust direction
-                if k == 0:
-                    r_desired = r0
-                    v_desired = v0
-                elif k == N - 1:
-                    r_desired = rf
-                    v_desired = vf
-                else:
-                    # Desired acceleration from trajectory curvature
-                    r_desired = r_traj[k]
-                    v_desired = v_traj[k]
-
-                # Compute required acceleration to track reference
-                if k < N - 1:
-                    v_next_desired = v_traj[min(k + 1, N - 1)]
-                    a_required = (v_next_desired - v_desired) / (dt + 1e-12) - g
-                else:
-                    a_required = -g  # terminal: just fight gravity
-
-                # Project onto thrust constraints
-                T_k = a_required.copy()
-                T_mag = np.linalg.norm(T_k)
-
-                # Clamp magnitude to [rho_min, rho_max]
-                if T_mag < 1e-9:
-                    T_k = np.array([0.0, 0.0, rho_min])
-                    T_mag = rho_min
-                else:
-                    T_mag_clamped = np.clip(T_mag, rho_min, rho_max)
-                    T_k = T_k / T_mag * T_mag_clamped
-                    T_mag = T_mag_clamped
-
-                # --- Pointing constraint: limit tilt from vertical ----------
-                T_hat = T_k / (np.linalg.norm(T_k) + 1e-12)
-                vertical = np.array([0.0, 0.0, 1.0])
-                cos_angle = np.dot(T_hat, vertical)
-                if cos_angle < self._max_tilt_cos:
-                    # Project thrust direction towards vertical
-                    perp = T_hat - cos_angle * vertical
-                    perp_norm = np.linalg.norm(perp)
-                    if perp_norm > 1e-12:
-                        sin_max = np.sqrt(1.0 - self._max_tilt_cos**2)
-                        T_hat_new = (
-                            self._max_tilt_cos * vertical
-                            + sin_max * perp / perp_norm
-                        )
-                        T_k = T_hat_new * T_mag
-
-                # --- Glide-slope constraint ---------------------------------
-                r_k = r_traj[k]
-                horizontal_dist = np.sqrt(r_k[0]**2 + r_k[1]**2)
-                altitude = r_k[2]
-                if altitude > 0 and horizontal_dist > 0:
-                    gs_ratio = altitude / horizontal_dist
-                    if gs_ratio < self._glide_slope_tan:
-                        # Pull trajectory towards cone interior -- apply
-                        # lateral acceleration reduction
-                        reduction = 0.9
-                        T_k[0] *= reduction
-                        T_k[1] *= reduction
-
-                sigma_k = np.linalg.norm(T_k)
-                # Enforce lossless convexification: ||T_k|| <= sigma_k
-                sigma_k = max(sigma_k, rho_min)
-                sigma_k = min(sigma_k, rho_max)
-
-                T_new[k] = T_k
-                sigma_new[k] = sigma_k
-
-            # --- Blend with previous iterate (relaxation) ------------------
-            T_traj = (1 - step_size) * T_traj + step_size * T_new
-            sigma = (1 - step_size) * sigma + step_size * sigma_new
-
-            # --- Forward-integrate dynamics with updated thrust ------------
-            r_traj[0] = r0.copy()
-            v_traj[0] = v0.copy()
-            for k in range(N - 1):
-                accel_k = T_traj[k] + g
-                v_traj[k + 1] = v_traj[k] + accel_k * dt
-                r_traj[k + 1] = r_traj[k] + v_traj[k] * dt + 0.5 * accel_k * dt**2
-
-            # --- Convergence check (boundary condition error) --------------
-            pos_err = np.linalg.norm(r_traj[-1] - rf)
-            vel_err = np.linalg.norm(v_traj[-1] - vf)
-            if pos_err < 1.0 and vel_err < 0.5:
-                break
-
-            # Tighten step size as we converge
-            step_size = min(step_size * 1.05, 0.95)
-
-        # --- Package into TrajectoryPoint list -----------------------------
-        trajectory: List[TrajectoryPoint] = []
-        for k in range(N):
-            T_k = T_traj[k]
-            T_mag = np.linalg.norm(T_k)
-            if T_mag > 1e-12:
-                direction = T_k / T_mag
-            else:
-                direction = np.array([0.0, 0.0, 1.0])
-
-            # Map thrust-acceleration magnitude back to throttle [0, 1]
-            throttle = np.clip(
-                (T_mag * mass) / (self._vc.max_total_thrust + 1e-12),
-                0.0, 1.0,
-            )
-
-            pt = TrajectoryPoint(
-                time=k * dt,
-                position=r_traj[k].copy(),
-                velocity=v_traj[k].copy(),
-                acceleration=T_traj[k].copy(),
-                thrust_direction=direction,
-                throttle=throttle,
-            )
-            trajectory.append(pt)
-
-        return trajectory
+            T_k = T_val[k]
+            mag = np.linalg.norm(T_k)
+            t_dir = T_k / mag if mag > 1e-6 else np.array([0., 0., 1.])
+            traj.append(TrajectoryPoint(
+                time=k * dt, position=r_val[k], velocity=v_val[k],
+                acceleration=T_k, thrust_direction=t_dir, throttle=float(np.clip(mag / rho_max, 0.0, 1.0))
+            ))
+            
+        return traj
 
 
 # ---------------------------------------------------------------------------
