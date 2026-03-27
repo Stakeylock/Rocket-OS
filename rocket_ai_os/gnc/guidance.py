@@ -97,7 +97,7 @@ class GFOLDSolver:
         vehicle_config: Optional[VehicleConfig] = None,
         guidance_config: Optional[GuidanceConfig] = None,
         sim_config: Optional[SimConfig] = None,
-        N: int = 3,
+        N: int = 20,
         max_iter: int = 15,
     ) -> None:
         self._vc = vehicle_config if vehicle_config else VehicleConfig()
@@ -254,7 +254,7 @@ class GFOLDSolver:
         prob = cp.Problem(objective, constraints)
         
         try:
-            prob.solve(solver=cp.OSQP, verbose=False)
+            prob.solve(solver=cp.CLARABEL, verbose=False)
         except Exception:
             try:
                 prob.solve(solver=cp.SCS, verbose=False)

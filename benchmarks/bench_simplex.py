@@ -44,7 +44,7 @@ FIG_DIR = os.path.join(ROOT, "results", "figures")
 os.makedirs(SIMPLEX_DIR, exist_ok=True)
 os.makedirs(FIG_DIR, exist_ok=True)
 
-TRIALS = 1
+TRIALS = 500
 FAULT_TYPES = ["adversarial", "stuck", "noise"]
 SEVERITIES = [0.3, 0.6, 1.0]
 MAX_STEPS = 60
