@@ -665,9 +665,6 @@ class FlightController:
 
     def reset(self) -> None:
         """Reset all internal controller states."""
-        self.attitude_pid.reset()
-        self.rate_pid.reset()
-        self.pos_pid.reset()
         self.simplex.reset()
         self._desired_attitude = np.array([1.0, 0.0, 0.0, 0.0])
         self._desired_position = np.zeros(3)

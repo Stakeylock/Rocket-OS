@@ -194,7 +194,7 @@ def plot_G15(df):
     path = os.path.join(FIG_DIR, "G15_landing_error_histogram.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 def plot_G16(results):
@@ -232,7 +232,7 @@ def plot_G16(results):
     path = os.path.join(FIG_DIR, "G16_trajectory_3d_line.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 def plot_G17(df):
@@ -267,7 +267,7 @@ def plot_G17(df):
     path = os.path.join(FIG_DIR, "G17_fuel_usage_bar.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 # =====================================================================
@@ -293,7 +293,7 @@ def main():
         writer.writeheader()
         for r in results:
             writer.writerow({k: r[k] for k in csv_fields})
-    print(f"  Saved → {csv_path}")
+    print(f"  Saved -> {csv_path}")
 
     df = pd.DataFrame([{k: r[k] for k in csv_fields} for r in results])
 
@@ -312,7 +312,7 @@ def main():
     plot_G16(results)
     plot_G17(df)
 
-    print("\n  Step 4 COMPLETE ✓")
+    print("\n  Step 4 COMPLETE [OK]")
 
 
 if __name__ == "__main__":

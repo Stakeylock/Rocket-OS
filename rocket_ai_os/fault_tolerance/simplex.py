@@ -415,26 +415,26 @@ class SimplexArchitecture:
         """
         self._total_ai_proposals += 1
 
-        # 결정 모듈(Decision Module)을 통해 AI 제안이 안전한지 확인
-        # Bug 2 Fix: Hysteresis 및 Dwell Timer 추가
+        # Evaluate AI proposal via decision module (forward-simulate + envelope check)
         approved, reason = self.decision_module.evaluate(ai_action, vehicle_state)
 
         if approved:
             if self._using_safety:
-                # 안전 모드에서 복구 중인 경우, 지정된 횟수만큼 연속 승인이 필요함
+                # Recovering from safety mode: require consecutive approvals
+                # before re-engaging AI (hysteresis / dwell timer)
                 self._dwell_counter += 1
                 if self._dwell_counter >= 50:  # REENGAGEMENT_DWELL_STEPS
                     self._log_switch("safety -> ai", ai_action.timestamp, "Safety recovered and dwell timer elapsed")
                     self._using_safety = False
                     self._dwell_counter = 0
                 else:
-                    # 아직 지연 시간이 남았으므로 안전 제어기 계속 사용
+                    # Dwell timer not yet elapsed -- keep using safety controller
                     return self.safety_controller.compute(
                         vehicle_state, ai_action.timestamp
                     )
             return ai_action
 
-        # 거부됨(Vetoed) -- 안전 제어기로 전환 및 지연 카운터 초기화
+        # Vetoed -- switch to safety controller and reset dwell counter
         self._total_vetoes += 1
         self._dwell_counter = 0
         

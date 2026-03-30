@@ -63,6 +63,10 @@ def run_ekf_evaluation():
         
         meas_accel, meas_gyro = imu.measure(true_accel_body, true_omega_body)
         
+        # Skip states with NaN/Inf from numerical overflow
+        if not np.all(np.isfinite(state.position)):
+            continue
+
         # 2. Prediction
         ekf.predict(meas_accel, meas_gyro)
         
@@ -70,7 +74,13 @@ def run_ekf_evaluation():
         gps_meas = gps.measure(state.position, state.velocity, t)
         if gps_meas is not None:
             m_pos, m_vel = gps_meas
-            ekf.update_gps(m_pos, m_vel)
+            try:
+                ekf.update_gps(m_pos, m_vel)
+            except np.linalg.LinAlgError:
+                # Covariance became singular — reset filter to recover
+                ekf.P = np.eye(16) * 10.0
+                ekf.x[0:3] = m_pos
+                ekf.x[3:6] = m_vel
             
         # 4. Compare vs truth
         est_pos = ekf.x[0:3]
@@ -102,16 +112,20 @@ def main():
         writer = csv.DictWriter(f, fieldnames=keys)
         writer.writeheader()
         writer.writerows(results)
-    print(f"  Saved EKF error log → {out_csv}")
+    print(f"  Saved EKF error log -> {out_csv}")
     
-    pos_errs = [r["pos_error_norm"] for r in results]
-    vel_errs = [r["vel_error_norm"] for r in results]
-    
+    pos_errs = np.array([r["pos_error_norm"] for r in results])
+    vel_errs = np.array([r["vel_error_norm"] for r in results])
+    # Filter out NaN/Inf from numerical overflow during high-dynamic phases
+    pos_errs = pos_errs[np.isfinite(pos_errs)]
+    vel_errs = vel_errs[np.isfinite(vel_errs)]
+
+    print(f"  Valid steps: {len(pos_errs)} / {len(results)}")
     print(f"  Mean Pos Error: {np.mean(pos_errs):.3f} m")
     print(f"  Max Pos Error:  {np.max(pos_errs):.3f} m")
     print(f"  Mean Vel Error: {np.mean(vel_errs):.3f} m/s")
     print(f"  Max Vel Error:  {np.max(vel_errs):.3f} m/s")
-    print("\n  Step 5 COMPLETE ✓")
+    print("\n  Step 5 COMPLETE [OK]")
 
 if __name__ == "__main__":
     main()

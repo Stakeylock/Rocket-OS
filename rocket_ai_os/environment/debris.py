@@ -23,9 +23,7 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from config import SimConfig
+from rocket_ai_os.config import SimConfig
 
 
 # ---------------------------------------------------------------------------

@@ -133,7 +133,7 @@ def fig_a_system_architecture():
         path = os.path.join(FIG_DIR, f"FigA_system_architecture.{fmt}")
         fig.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
-    print(f"  Saved → FigA_system_architecture.pdf/.png")
+    print(f"  Saved -> FigA_system_architecture.pdf/.png")
 
 
 # =====================================================================
@@ -193,7 +193,7 @@ def fig_b_simplex_architecture():
         fig.savefig(os.path.join(FIG_DIR, f"FigB_simplex_architecture.{fmt}"),
                     dpi=300, bbox_inches="tight")
     plt.close(fig)
-    print(f"  Saved → FigB_simplex_architecture.pdf/.png")
+    print(f"  Saved -> FigB_simplex_architecture.pdf/.png")
 
 
 # =====================================================================
@@ -248,7 +248,7 @@ def fig_c_transformer_architecture():
         fig.savefig(os.path.join(FIG_DIR, f"FigC_transformer_architecture.{fmt}"),
                     dpi=300, bbox_inches="tight")
     plt.close(fig)
-    print(f"  Saved → FigC_transformer_architecture.pdf/.png")
+    print(f"  Saved -> FigC_transformer_architecture.pdf/.png")
 
 
 # =====================================================================
@@ -328,7 +328,7 @@ def fig_d_arinc653_schedule():
         fig.savefig(os.path.join(FIG_DIR, f"FigD_arinc653_schedule.{fmt}"),
                     dpi=300, bbox_inches="tight")
     plt.close(fig)
-    print(f"  Saved → FigD_arinc653_schedule.pdf/.png")
+    print(f"  Saved -> FigD_arinc653_schedule.pdf/.png")
 
 
 # =====================================================================
@@ -382,7 +382,7 @@ def fig_e_monte_carlo_setup():
         fig.savefig(os.path.join(FIG_DIR, f"FigE_monte_carlo_setup.{fmt}"),
                     dpi=300, bbox_inches="tight")
     plt.close(fig)
-    print(f"  Saved → FigE_monte_carlo_setup.pdf/.png")
+    print(f"  Saved -> FigE_monte_carlo_setup.pdf/.png")
 
 
 # =====================================================================
@@ -399,7 +399,7 @@ def main():
     fig_d_arinc653_schedule()
     fig_e_monte_carlo_setup()
 
-    print("\n  Step 5 COMPLETE ✓")
+    print("\n  Step 5 COMPLETE [OK]")
 
 
 if __name__ == "__main__":

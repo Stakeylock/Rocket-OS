@@ -44,7 +44,7 @@ FIG_DIR = os.path.join(ROOT, "results", "figures")
 os.makedirs(SIMPLEX_DIR, exist_ok=True)
 os.makedirs(FIG_DIR, exist_ok=True)
 
-TRIALS = 5
+TRIALS = 200
 FAULT_TYPES = ["adversarial", "stuck", "noise"]
 SEVERITIES = [0.3, 0.6, 1.0]
 MAX_STEPS = 60
@@ -401,7 +401,7 @@ def run_detailed_simplex_cases(cfg: SystemConfig):
 # 2d  Monte Carlo runner
 # =====================================================================
 def run_monte_carlo(cfg: SystemConfig):
-    """Run 500 trials with/without Simplex."""
+    """Run Monte Carlo trials with/without Simplex."""
     results = []
     print(f"  Running {TRIALS} Monte Carlo trials...", flush=True)
     for trial in tqdm(range(TRIALS), desc="  Monte Carlo", ncols=70):
@@ -493,7 +493,7 @@ def plot_G06(df):
                 palette="Set2", order=FAULT_TYPES)
     ax.set_xlabel("Fault Type")
     ax.set_ylabel("Recovery Time (steps)")
-    ax.set_title("G6 — Recovery Time Distribution Across 500 Trials")
+    ax.set_title(f"G6 — Recovery Time Distribution Across {TRIALS} Trials")
     fig.tight_layout()
     path = os.path.join(FIG_DIR, "G06_recovery_time_box.png")
     fig.savefig(path, dpi=300)

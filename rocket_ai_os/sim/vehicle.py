@@ -192,6 +192,10 @@ class Vehicle:
             is_destroyed=False,
         )
 
+        # Track whether the vehicle has been airborne (prevents false
+        # landing detection when starting on the ground for launch scenarios)
+        self._has_been_airborne: bool = False
+
         # Cache moment of inertia and its inverse
         self._inertia = self.config.moment_of_inertia.copy()
         self._inertia_inv = np.linalg.inv(self._inertia)
@@ -325,10 +329,12 @@ class Vehicle:
         )
 
         # --- ground contact ---
-        # Bug 1 Fix: Use robust thresholds for landing detection.
-        # Check altitude against 10cm tolerance to avoid floating point misses.
+        # Track airborne status to prevent false landing at launch
         altitude = self.state.position[2]
-        if altitude <= 0.10: 
+        if altitude > 10.0:
+            self._has_been_airborne = True
+
+        if self._has_been_airborne and altitude <= 0.10: 
             # Snap to ground if very close
             if altitude < 0.0:
                 self.state.position[2] = 0.0

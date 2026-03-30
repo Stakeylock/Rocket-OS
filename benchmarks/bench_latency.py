@@ -268,7 +268,7 @@ def save_csv(timings: dict, totals: list, filepath: str):
         for i in range(len(totals)):
             row = [i] + [timings[n][i] for n in names] + [totals[i]]
             writer.writerow(row)
-    print(f"  Saved → {filepath}")
+    print(f"  Saved -> {filepath}")
 
 
 # =====================================================================
@@ -300,7 +300,7 @@ def plot_G01(part_timings, mono_timings):
     path = os.path.join(FIG_DIR, "G01_subsystem_latency_bar.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 def plot_G02(part_timings, mono_timings):
@@ -325,7 +325,7 @@ def plot_G02(part_timings, mono_timings):
     path = os.path.join(FIG_DIR, "G02_latency_distribution_box.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 def plot_G03(part_totals, mono_totals):
@@ -342,7 +342,7 @@ def plot_G03(part_totals, mono_totals):
     path = os.path.join(FIG_DIR, "G03_cumulative_latency_line.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 def plot_G04(frame_utils, cfg):
@@ -368,7 +368,7 @@ def plot_G04(frame_utils, cfg):
     path = os.path.join(FIG_DIR, "G04_partition_utilization_heatmap.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 # =====================================================================
@@ -413,7 +413,7 @@ def main():
     plot_G03(part_totals, mono_totals)
     plot_G04(frame_utils, cfg)
 
-    print("\n  Step 1 COMPLETE ✓")
+    print("\n  Step 1 COMPLETE [OK]")
 
 
 if __name__ == "__main__":

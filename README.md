@@ -67,7 +67,7 @@ test_mission_smoke.py    # Smoke tests for mission management subsystem
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/Rocket-OS.git
+git clone https://github.com/JINITANGSU-DAS/Rocket-OS.git
 cd Rocket-OS
 
 # Install dependencies
@@ -82,7 +82,7 @@ pip install -r requirements.txt
 python -m rocket_ai_os
 ```
 
-This executes all 13 demonstration sections:
+This executes the full demonstration covering all 20 subsystems across 13 grouped sections:
 
 1. ARINC 653 Partitioned RTOS initialisation
 2. cFS Software Bus + DDS middleware bridge

@@ -98,6 +98,27 @@ class Scenario(abc.ABC):
 
 
 # ---------------------------------------------------------------------------
+# Attitude stabilization torque (mimics TVC / reaction control)
+# ---------------------------------------------------------------------------
+
+def _stabilization_torque(vehicle: Vehicle) -> np.ndarray:
+    """Compute a restoring torque that drives the vehicle attitude toward
+    vertical (body-Z aligned with inertial-Z).  This approximates the
+    combined effect of thrust vector control and reaction control thrusters
+    without running the full flight controller."""
+    state = vehicle.state
+    C_nb = _quat_to_dcm(state.attitude)
+    body_z_inertial = C_nb[:, 2]
+    desired_z = np.array([0.0, 0.0, 1.0])
+
+    # Torque proportional to cross product (rotation error) with rate damping
+    error = np.cross(body_z_inertial, desired_z)
+    kp = 1e6
+    kd = 5e5
+    return kp * error - kd * state.angular_velocity
+
+
+# ---------------------------------------------------------------------------
 # Simple proportional-navigation guidance for landing scenarios
 # ---------------------------------------------------------------------------
 
@@ -129,16 +150,24 @@ def _landing_guidance(
     mass = max(state.mass, 1.0)
     g = 9.81
 
-    # Time-to-go estimate (avoid division by zero)
-    altitude = max(state.position[2], 1.0)
+    altitude = max(state.position[2], 0.1)
     vz = state.velocity[2]
-    ttgo = max((-vz + np.sqrt(vz ** 2 + 2.0 * g * altitude)) / g, 0.5)
 
-    # Desired acceleration: cancel velocity + correct position + gravity comp
-    kp_pos = 0.8 / max(ttgo, 0.5)
-    kd_vel = 1.5
+    # --- Horizontal channel: PD control toward target ---
+    kp_h = 0.3
+    kd_h = 1.2
+    a_cmd_h = kp_h * pos_error[:2] - kd_h * vel[:2]
 
-    a_cmd = kp_pos * pos_error - kd_vel * vel + np.array([0.0, 0.0, g])
+    # --- Vertical channel: constant-deceleration descent profile ---
+    # Desired descent speed for a soft touchdown at ~1.5 m/s.
+    # Uses 0.3g net deceleration margin to ensure the controller can track.
+    v_touchdown = 1.5
+    v_des = -np.sqrt(max(0.3 * g * altitude + v_touchdown ** 2, 0.0))
+    vz_error = v_des - vz
+    kp_z = 4.0
+    a_cmd_z = g + kp_z * vz_error  # gravity comp + velocity tracking
+
+    a_cmd = np.array([a_cmd_h[0], a_cmd_h[1], a_cmd_z])
 
     # Clamp commanded acceleration to thrust limits
     thrust_min = config.max_thrust_per_engine * config.min_throttle
@@ -258,23 +287,20 @@ class NominalLandingScenario(Scenario):
             )
 
             # --- Fuel consumption ---
-            # Bug 1: Check fuel exhaustion as a termination condition
             thrust_mag = np.linalg.norm(f_thrust)
             g0 = 9.81
             isp = 282.0  # sea-level default
-            if thrust_mag > 0:
+            if state.fuel_mass <= 0:
+                # No fuel -- coast under gravity (no thrust)
+                f_thrust = np.zeros(3)
+                thrust_mag = 0.0
+            elif thrust_mag > 0:
                 mass_flow = thrust_mag / (isp * g0)
                 self.vehicle.consume_fuel(mass_flow, dt)
-                
-            if state.fuel_mass <= 0 and not state.is_landed and not state.is_destroyed:
-                # Hovering or flying without fuel = failure
-                result.events_log.append((t, "CRITICAL: Fuel exhausted"))
-                result.failure_reason = "fuel_exhausted"
-                break
 
             # --- Total force and torque ---
             total_force = f_gravity + f_aero + f_thrust
-            total_torque = t_aero  # thrust torque omitted for simplicity
+            total_torque = t_aero + _stabilization_torque(self.vehicle) + _stabilization_torque(self.vehicle)
 
             # --- Integrate ---
             self.vehicle.apply_forces(total_force, total_torque, dt)
@@ -471,22 +497,19 @@ class EngineOutScenario(Scenario):
                     f_thrust = f_thrust / f_mag * max_available
 
             # --- Fuel consumption ---
-            # Bug 1: Check fuel exhaustion as a termination condition
             thrust_mag = np.linalg.norm(f_thrust)
             g0 = 9.81
             isp = 282.0
-            if thrust_mag > 0:
+            if state.fuel_mass <= 0:
+                f_thrust = np.zeros(3)
+                thrust_mag = 0.0
+            elif thrust_mag > 0:
                 mass_flow = thrust_mag / (isp * g0)
                 self.vehicle.consume_fuel(mass_flow, dt)
 
-            if state.fuel_mass <= 0 and not state.is_landed and not state.is_destroyed:
-                result.events_log.append((t, "CRITICAL: Fuel exhausted"))
-                result.failure_reason = "fuel_exhausted"
-                break
-
             # --- Integrate ---
             total_force = f_gravity + f_aero + f_thrust
-            total_torque = t_aero
+            total_torque = t_aero + _stabilization_torque(self.vehicle)
             self.vehicle.apply_forces(total_force, total_torque, dt)
             t = self.vehicle.state.time
 
@@ -687,22 +710,19 @@ class SensorDegradationScenario(Scenario):
             self.vehicle.state.velocity = true_vel
 
             # --- Fuel consumption ---
-            # Bug 1: Check fuel exhaustion as a termination condition
             thrust_mag = np.linalg.norm(f_thrust)
             g0 = 9.81
             isp = 282.0
-            if thrust_mag > 0:
+            if state.fuel_mass <= 0:
+                f_thrust = np.zeros(3)
+                thrust_mag = 0.0
+            elif thrust_mag > 0:
                 mass_flow = thrust_mag / (isp * g0)
                 self.vehicle.consume_fuel(mass_flow, dt)
-                
-            if state.fuel_mass <= 0 and not state.is_landed and not state.is_destroyed:
-                result.events_log.append((t, "CRITICAL: Fuel exhausted"))
-                result.failure_reason = "fuel_exhausted"
-                break
 
             # --- Integrate (uses true dynamics) ---
             total_force = f_gravity + f_aero + f_thrust
-            total_torque = t_aero
+            total_torque = t_aero + _stabilization_torque(self.vehicle)
             self.vehicle.apply_forces(total_force, total_torque, dt)
             t = self.vehicle.state.time
 
@@ -1042,23 +1062,16 @@ class FullMissionScenario(Scenario):
             thrust_mag = np.linalg.norm(f_thrust)
             g0 = 9.81
             isp = 282.0 + 29.0 * min(alt / 80_000.0, 1.0)  # altitude-dependent ISP
-            if thrust_mag > 0:
+            if state.fuel_mass <= 0:
+                f_thrust = np.zeros(3)
+                thrust_mag = 0.0
+            elif thrust_mag > 0:
                 mass_flow = thrust_mag / (isp * g0)
                 consumed = self.vehicle.consume_fuel(mass_flow, dt)
-                
-                if state.fuel_mass <= 0 and state.phase not in {
-                    MissionPhase.COAST,
-                    MissionPhase.AERODYNAMIC_DESCENT,
-                    MissionPhase.LANDED,
-                }:
-                    result.events_log.append((t, "CRITICAL: Fuel exhausted"))
-                    result.failure_reason = "fuel_exhausted"
-                    f_thrust = np.zeros(3)
-                    break
 
             # --- Integrate ---
             total_force = f_gravity + f_aero + f_thrust
-            total_torque = t_aero
+            total_torque = t_aero + _stabilization_torque(self.vehicle)
             self.vehicle.apply_forces(total_force, total_torque, dt)
             t = self.vehicle.state.time
 

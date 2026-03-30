@@ -66,7 +66,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 - Test coverage is focused on mission management; other subsystems have minimal tests
 - Simplex safety monitoring uses simplified CBF instead of full reachability analysis
-- Monte Carlo benchmarks use 5 trials for demonstration (expand for publication)
+- Monte Carlo benchmarks use 200 trials per condition for statistical significance
 - Debris tracking is simplified; real-world implementation requires additional data sources
 
 ### Future Work
@@ -79,4 +79,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-For detailed information about each subsystem, see the [README.md](https://github.com/your-username/Rocket-OS/blob/main/README.md).
+For detailed information about each subsystem, see the [README.md](https://github.com/JINITANGSU-DAS/Rocket-OS/blob/main/README.md).

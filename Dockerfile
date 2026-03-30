@@ -32,4 +32,4 @@ COPY . /app
 RUN pip3 install -e .
 
 # Set default command to run all benchmarks
-CMD ["python3", "-m", "unittest", "discover"]
+CMD ["python3", "-m", "pytest", "-v", "--tb=short"]

@@ -104,6 +104,14 @@ Maintainers will:
 3. Create a GitHub Release with tag `vX.Y.Z`
 4. Update the version badge in README
 
+## Research Contribution Framing
+
+This project accompanies a research paper. The selected framing is:
+
+> **Quantitative characterization of Simplex switching latency under RL policy degradation.**
+>
+> This paper contributes the first empirical characterization of Simplex architecture switching latency under Reinforcement Learning policy degradation in a fully integrated, 20-subsystem avionics stack. This is demonstrated by measuring the fault detection and recovery response times of the architecture, and comparing the safety envelope maintenance against a traditional PID-only baseline under statistical Monte Carlo fault injection conditions.
+
 ## Questions?
 
 - Check existing issues and documentation
@@ -113,7 +121,3 @@ Maintainers will:
 ## License
 
 By contributing, you agree your contributions will be licensed under the MIT License (same as the project).
-
----
-
-Thank you for helping improve this project! 🚀

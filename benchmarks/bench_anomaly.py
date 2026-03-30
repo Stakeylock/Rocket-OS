@@ -354,7 +354,7 @@ def plot_G10(all_y_true, all_y_scores, detectors):
     path = os.path.join(FIG_DIR, "G10_roc_curve.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 def plot_G11(df):
@@ -380,7 +380,7 @@ def plot_G11(df):
     path = os.path.join(FIG_DIR, "G11_f1_by_fault_bar.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 def plot_G12(df):
@@ -397,7 +397,7 @@ def plot_G12(df):
     path = os.path.join(FIG_DIR, "G12_detection_latency_box.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 def plot_G13():
@@ -447,7 +447,7 @@ def plot_G13():
     path = os.path.join(FIG_DIR, "G13_thrust_signal_line.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 def plot_G14(df):
@@ -480,7 +480,7 @@ def plot_G14(df):
     path = os.path.join(FIG_DIR, "G14_confusion_matrix.png")
     fig.savefig(path, dpi=300)
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 
 # =====================================================================
@@ -500,7 +500,7 @@ def main():
         writer = csv.DictWriter(f, fieldnames=keys)
         writer.writeheader()
         writer.writerows(results)
-    print(f"  Saved → {filepath}")
+    print(f"  Saved -> {filepath}")
 
     df = pd.DataFrame(results)
 
@@ -522,7 +522,7 @@ def main():
     plot_G13()
     plot_G14(df)
 
-    print("\n  Step 3 COMPLETE ✓")
+    print("\n  Step 3 COMPLETE [OK]")
 
 
 if __name__ == "__main__":
