@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(pdftotext \"/e/ros/jiniresume.pdf\" -)",
+      "Bash(ls:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

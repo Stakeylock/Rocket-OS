@@ -666,6 +666,60 @@ class HTNPlanner:
             criticality=2,
         ))
 
+        # Powered descent primitive tasks
+        self.register_primitive(PrimitiveTask(
+            name="powered_descent_init",
+            preconditions={
+                "phase": MissionPhase.ENTRY_BURN,
+                "engines_running": False,
+                "fuel_remaining": lambda f: f > 0.1,
+            },
+            effects={"phase": MissionPhase.LANDING_BURN},
+            duration_estimate=1.0,
+            criticality=1,
+        ))
+
+        self.register_primitive(PrimitiveTask(
+            name="powered_descent_guide",
+            preconditions={
+                "phase": MissionPhase.LANDING_BURN,
+                "engines_running": True,
+                "guidance_active": False,
+            },
+            effects={"guidance_active": True},
+            duration_estimate=0.5,
+            criticality=2,
+        ))
+
+        self.register_primitive(PrimitiveTask(
+            name="powered_descent_execute",
+            preconditions={
+                "phase": MissionPhase.LANDING_BURN,
+                "engines_running": True,
+                "guidance_active": True,
+                "altitude_above_landing": lambda h: h > 5.0,
+            },
+            effects={"descent_progress": lambda p: min(p + 0.1, 1.0)},
+            duration_estimate=2.0,
+            criticality=2,
+        ))
+
+        self.register_primitive(PrimitiveTask(
+            name="powered_descent_complete",
+            preconditions={
+                "phase": MissionPhase.LANDING_BURN,
+                "engines_running": True,
+                "altitude_above_landing": lambda h: h <= 2.0,
+                "velocity_magnitude": lambda v: v < 2.0,
+            },
+            effects={
+                "phase": MissionPhase.TERMINAL_LANDING,
+                "guidance_active": False,
+            },
+            duration_estimate=1.0,
+            criticality=1,
+        ))
+
         # ---- Compound tasks -------------------------------------------
 
         self.register_compound(CompoundTask(
@@ -746,6 +800,21 @@ class HTNPlanner:
             preconditions={
                 "stage_separated": True,
                 "fuel_remaining": lambda f: f > 0.05,
+            },
+        ))
+
+        # Powered descent compound task
+        self.register_compound(CompoundTask(
+            name="powered_descent",
+            subtasks=[
+                "powered_descent_init",
+                "powered_descent_guide",
+                "powered_descent_execute",
+                "powered_descent_complete",
+            ],
+            decomposition_method="ordered",
+            preconditions={
+                "fuel_remaining": lambda f: f > 0.1,
             },
         ))
 

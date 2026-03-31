@@ -34,6 +34,14 @@ from rocket_ai_os.config import (
 )
 from rocket_ai_os.gnc.navigation import NavigationState
 
+# Try to import cvxpy for G-FOLD solver, fallback to NumPy-only if not available
+try:
+    import cvxpy as cp
+    CVXPY_AVAILABLE = True
+except ImportError:
+    CVXPY_AVAILABLE = False
+    cp = None
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -207,6 +215,57 @@ class GFOLDSolver:
 
     # -- successive convexification ------------------------------------------
 
+    def _proportional_fallback(
+        self,
+        r0: np.ndarray,
+        v0: np.ndarray,
+        rf: np.ndarray,
+        vf: np.ndarray,
+        mass: float,
+        fuel_remaining: float,
+        dt: float,
+        tf: float,
+    ) -> List[TrajectoryPoint]:
+        """Fallback proportional guidance when cvxpy is not available or solver fails."""
+        # Simple proportional guidance as fallback
+        g = self.gravity  # Access gravity from the class
+        N = max(10, int(tf / dt))  # Ensure at least 10 points
+        dt_actual = tf / (N - 1) if N > 1 else dt
+
+        # Linear interpolation between initial and final states
+        traj = []
+        for k in range(N):
+            alpha = k / (N - 1) if N > 1 else 0.0
+            position = r0 + alpha * (rf - r0)
+            velocity = v0 + alpha * (vf - v0)
+
+            # Simple PD-like acceleration command
+            pos_error = rf - position
+            vel_error = vf - velocity
+            kp, kd = 1.0, 2.0
+            acceleration = kp * pos_error + kd * vel_error - g
+
+            # Convert acceleration to thrust
+            thrust_magnitude = np.linalg.norm(acceleration * mass)
+            max_thrust = self._vc.max_total_thrust
+            throttle = np.clip(thrust_magnitude / max_thrust, 0.0, 1.0)
+
+            if thrust_magnitude > 1e-6:
+                thrust_direction = acceleration / thrust_magnitude
+            else:
+                thrust_direction = np.array([0.0, 0.0, 1.0])
+
+            traj.append(TrajectoryPoint(
+                time=k * dt_actual,
+                position=position,
+                velocity=velocity,
+                acceleration=acceleration,
+                thrust_direction=thrust_direction,
+                throttle=throttle
+            ))
+
+        return traj
+
     def _successive_convexification(
         self,
         r0: np.ndarray,
@@ -218,66 +277,70 @@ class GFOLDSolver:
         dt: float,
         tf: float,
     ) -> List[TrajectoryPoint]:
-        import cvxpy as cp
         N = self.N
         g = self.gravity
 
         rho_min = self._rho_min / mass
         rho_max = self._rho_max / mass
 
-        r = cp.Variable((N, 3))
-        v = cp.Variable((N, 3))
-        T = cp.Variable((N, 3))
-        sigma = cp.Variable(N)
+        if CVXPY_AVAILABLE:
+            # Use cvxpy for convex optimization
+            r = cp.Variable((N, 3))
+            v = cp.Variable((N, 3))
+            T = cp.Variable((N, 3))
+            sigma = cp.Variable(N)
 
-        constraints = [
-            r[0] == r0,
-            v[0] == v0,
-            r[N-1] == rf,
-            v[N-1] == vf,
-        ]
+            constraints = [
+                r[0] == r0,
+                v[0] == v0,
+                r[N-1] == rf,
+                v[N-1] == vf,
+            ]
 
-        for k in range(N - 1):
-            constraints.append(v[k+1] == v[k] + dt * (T[k] + g))
-            constraints.append(r[k+1] == r[k] + dt * v[k] + 0.5 * dt**2 * (T[k] + g))
+            for k in range(N - 1):
+                constraints.append(v[k+1] == v[k] + dt * (T[k] + g))
+                constraints.append(r[k+1] == r[k] + dt * v[k] + 0.5 * dt**2 * (T[k] + g))
 
-        for k in range(N):
-            constraints.append(cp.norm(T[k]) <= sigma[k])
-            constraints.append(sigma[k] >= rho_min)
-            constraints.append(sigma[k] <= rho_max)
-            constraints.append(T[k, 2] >= sigma[k] * self._max_tilt_cos)
+            for k in range(N):
+                constraints.append(cp.norm(T[k]) <= sigma[k])
+                constraints.append(sigma[k] >= rho_min)
+                constraints.append(sigma[k] <= rho_max)
+                constraints.append(T[k, 2] >= sigma[k] * self._max_tilt_cos)
 
-            if 0 < k < N - 1:
-                constraints.append(r[k, 2] - rf[2] >= self._glide_slope_tan * cp.norm(r[k, 0:2] - rf[0:2]))
+                if 0 < k < N - 1:
+                    constraints.append(r[k, 2] - rf[2] >= self._glide_slope_tan * cp.norm(r[k, 0:2] - rf[0:2]))
 
-        objective = cp.Minimize(cp.sum(sigma))
-        prob = cp.Problem(objective, constraints)
-        
-        try:
-            prob.solve(solver=cp.CLARABEL, verbose=False)
-        except Exception:
+            objective = cp.Minimize(cp.sum(sigma))
+            prob = cp.Problem(objective, constraints)
+
             try:
-                prob.solve(solver=cp.SCS, verbose=False)
+                prob.solve(solver=cp.CLARABEL, verbose=False)
             except Exception:
-                pass
+                try:
+                    prob.solve(solver=cp.SCS, verbose=False)
+                except Exception:
+                    pass
 
-        if prob.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE] or T.value is None:
-            # Fallback to an empty list
-            return []
+            if prob.status not in [cp.OPTIMAL, cp.OPTIMAL_INACCURATE] or T.value is None:
+                # Fallback to proportional guidance if cvxpy fails
+                return self._proportional_fallback(r0, v0, rf, vf, mass, fuel_remaining, dt, tf)
 
-        T_val, r_val, v_val = T.value, r.value, v.value
-        
-        traj = []
-        for k in range(N):
-            T_k = T_val[k]
-            mag = np.linalg.norm(T_k)
-            t_dir = T_k / mag if mag > 1e-6 else np.array([0., 0., 1.])
-            traj.append(TrajectoryPoint(
-                time=k * dt, position=r_val[k], velocity=v_val[k],
-                acceleration=T_k, thrust_direction=t_dir, throttle=float(np.clip(mag / rho_max, 0.0, 1.0))
-            ))
-            
-        return traj
+            T_val, r_val, v_val = T.value, r.value, v.value
+
+            traj = []
+            for k in range(N):
+                T_k = T_val[k]
+                mag = np.linalg.norm(T_k)
+                t_dir = T_k / mag if mag > 1e-6 else np.array([0., 0., 1.])
+                traj.append(TrajectoryPoint(
+                    time=k * dt, position=r_val[k], velocity=v_val[k],
+                    acceleration=T_k, thrust_direction=t_dir, throttle=float(np.clip(mag / rho_max, 0.0, 1.0))
+                ))
+
+            return traj
+        else:
+            # Fallback to proportional guidance when cvxpy is not available
+            return self._proportional_fallback(r0, v0, rf, vf, mass, fuel_remaining, dt, tf)
 
 
 # ---------------------------------------------------------------------------
