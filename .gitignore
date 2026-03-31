@@ -31,5 +31,8 @@ htmlcov/
 .coverage
 coverage.xml
 
+# Claude session data
+.claude/
+
 # Stale output
 out.txt

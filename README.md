@@ -16,28 +16,28 @@ This project is the reference implementation for the research paper *"Resilient 
 
 ## Key Features
 
-| # | Subsystem | Description |
-|---|-----------|-------------|
-| 1 | **ARINC 653 RTOS** | Partitioned RTOS with time/space isolation |
-| 2 | **cFS Software Bus + DDS** | Middleware bridge for publish-subscribe messaging |
-| 3 | **EKF Navigation** | Extended Kalman Filter fusing IMU + GPS |
-| 4 | **G-FOLD Guidance** | Convex trajectory optimisation for powered descent |
-| 5 | **Flight Controller** | PID + RL Adaptive control with Simplex safety |
-| 6 | **Engine Cluster + FTCA** | 9-engine cluster with fault-tolerant control allocation |
-| 7 | **Anomaly Detection** | Transformer-based engine anomaly detection |
-| 8 | **TTEthernet** | Deterministic networking with triplex redundancy |
-| 9 | **Simplex Architecture** | Safety assurance for AI-in-the-loop control |
-| 10 | **TMR + SEU Scrubbing** | Triple Modular Redundancy with radiation mitigation |
-| 11 | **FDIR** | Hierarchical Fault Detection, Isolation & Recovery |
-| 12 | **Cognitive Radio** | Adaptive modulation with link recovery |
-| 13 | **DTN** | Bundle protocol with custody transfer |
-| 14 | **Mesh Network** | Self-healing mesh topology |
-| 15 | **GOAC** | Goal-Oriented Autonomous Controller |
-| 16 | **HTN Planner** | Hierarchical Task Network planning |
-| 17 | **UA Scheduler** | Utility Accrual scheduling |
-| 18 | **ALHAT** | Autonomous Landing Hazard Avoidance Technology |
-| 19 | **Space Weather** | Solar radiation monitoring and shielding |
-| 20 | **Debris Avoidance** | Orbital debris tracking and collision assessment |
+| #   | Subsystem                     | Description                                     |
+|-----|-------------------------------|-------------------------------------------------|
+| 1   | ARINC 653 RTOS                | Partitioned RTOS with time/space isolation      |
+| 2   | cFS Software Bus + DDS        | Middleware bridge for publish-subscribe messaging|
+| 3   | EKF Navigation                | Extended Kalman Filter fusing IMU + GPS         |
+| 4   | G-FOLD Guidance               | Convex trajectory optimisation for powered descent|
+| 5   | Flight Controller             | PID + RL Adaptive control with Simplex safety   |
+| 6   | Engine Cluster + FTCA         | 9-engine cluster with fault-tolerant control allocation|
+| 7   | Anomaly Detection             | Transformer-based engine anomaly detection      |
+| 8   | TTEthernet                    | Deterministic networking with triplex redundancy|
+| 9   | Simplex Architecture          | Safety assurance for AI-in-the-loop control     |
+| 10  | TMR + SEU Scrubbing           | Triple Modular Redundancy with radiation mitigation|
+| 11  | FDIR                          | Hierarchical Fault Detection, Isolation & Recovery|
+| 12  | Cognitive Radio               | Adaptive modulation with link recovery          |
+| 13  | DTN                           | Bundle protocol with custody transfer           |
+| 14  | Mesh Network                  | Self-healing mesh topology                      |
+| 15  | GOAC                          | Goal-Oriented Autonomous Controller             |
+| 16  | HTN Planner                   | Hierarchical Task Network planning              |
+| 17  | UA Scheduler                  | Utility Accrual scheduling                      |
+| 18  | ALHAT                         | Autonomous Landing Hazard Avoidance Technology  |
+| 19  | Space Weather                 | Solar radiation monitoring and shielding        |
+| 20  | Debris Avoidance              | Orbital debris tracking and collision assessment|
 
 ## Project Structure
 
