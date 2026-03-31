@@ -67,7 +67,7 @@ test_mission_smoke.py    # Smoke tests for mission management subsystem
 
 ```bash
 # Clone the repository
-git clone https://github.com/JINITANGSU-DAS/Rocket-OS.git
+git clone https://github.com/Stakeylock/Rocket-OS.git
 cd Rocket-OS
 
 # Install dependencies
