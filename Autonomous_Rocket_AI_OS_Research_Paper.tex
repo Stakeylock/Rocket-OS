@@ -11,23 +11,35 @@
 \usepackage{subcaption}
 \usepackage{float}
 \usepackage{enumitem}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{amsthm}
 
 \def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
     T\kern-.1667em\lower.7ex\hbox{E}\kern-.1167em\lower.7ex\hbox{X}}}
 
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{remark}{Remark}
+
 \begin{document}
 
 \title{Resilient Autonomy: A Next-Generation Avionics Architecture for Self-Governing Launch Vehicles}
-\author{
-\IEEEauthorblockN{Jinitangsu Das}
-\IEEEauthorblockA{
-\textit{Department of Computer Science and Engineering}\\
-\textit{Jawaharlal Nehru Technological University Hyderabad}\\
-Hyderabad, India\\
-Email: 23011p0521@jntuhceh.ac.in
-}
-}
 
+\author{
+\IEEEauthorblockN{
+    Jinitangsu Das\IEEEauthorrefmark{1},
+    Zayed Aman\IEEEauthorrefmark{2},
+    PV Sreekar\IEEEauthorrefmark{3},
+    Gattigopula Sindhu\IEEEauthorrefmark{4}
+}
+\IEEEauthorblockA{
+    \IEEEauthorrefmark{1}\IEEEauthorrefmark{2}\IEEEauthorrefmark{3}\IEEEauthorrefmark{4}%
+    Department of Computer Science and Engineering,\\
+    Jawaharlal Nehru Technological University Hyderabad, Hyderabad, India\\
+    \{23011p0521, 23011p0543, 23011p0510, 24015a0510\}@jntuhceh.ac.in
+}
+}
 \maketitle
 
 \begin{abstract}
@@ -39,98 +51,72 @@ The architecture features clearly defined inputs and outputs for each subsystem,
 \end{abstract}
 
 \begin{IEEEkeywords}
-Autonomous rocket, avionics architecture, G-FOLD guidance, fault tolerance, reinforcement learning, HTN planning, TTEthernet, Simplex safety
+Autonomous rocket, avionics architecture, G-FOLD guidance, fault tolerance, reinforcement learning, HTN planning, TTEthernet, Simplex safety, convex optimization, anomaly detection
 \end{IEEEkeywords}
 
 \section{Introduction}
-Modern launch vehicle autonomy requires sophisticated avionics capable of handling complex mission scenarios while maintaining rigorous safety standards. Traditional approaches often isolate subsystems, creating brittle architectures that fail catastrophically under unexpected conditions. This paper presents Autonomous Rocket AI OS, an integrated avionics framework that achieves resilient autonomy through deep subsystem integration, hierarchical redundancy, and adaptive control mechanisms.
+\label{sec:introduction}
+
+Modern launch vehicle autonomy requires sophisticated avionics capable of handling complex mission scenarios while maintaining rigorous safety standards\cite{cziklovszki2020avionics}. Traditional approaches often isolate subsystems, creating brittle architectures that fail catastrophically under unexpected conditions. This paper presents Autonomous Rocket AI OS, an integrated avionics framework that achieves resilient autonomy through deep subsystem integration, hierarchical redundancy, and adaptive control mechanisms.
 
 The architecture implements twenty subsystems grouped into six functional layers: (1) Real-Time Foundations (ARINC 653 RTOS, cFS Software Bus, DDS middleware), (2) Guidance, Navigation, and Control (EKF navigation, G-FOLD guidance, PID+RL adaptive control with Simplex safety), (3) Propulsion and Health Management (9-engine cluster with FTCA, transformer-based anomaly detection), (4) Fault Tolerance and Networking (TTEthernet, TMR with SEU scrubbing, hierarchical FDIR), (5) Communications (cognitive radio, DTN, mesh networking), and (6) Mission and Environmental Intelligence (GOAC, HTN planning, UA scheduling, ALHAT, space weather, debris avoidance).
 
-Novel contributions include: (1) A lossless convexification G-FOLD solver with graceful degradation to proportional guidance when cvxpy is unavailable, (2) Integration of reinforcement learning adaptive control within a Simplex safety architecture, (3) Transformer-based engine anomaly detection for predictive maintenance, (4) Goal-Oriented Autonomous Controller with Hierarchical Task Network planning for mission-level autonomy, and (5) A Gymnasium-compatible reinforcement learning interface enabling policy optimization in high-fidelity simulation.
+Novel contributions include: (1) A lossless convexification G-FOLD solver with graceful degradation to proportional guidance when cvxpy is unavailable\cite{acikmese2007convex}\cite{blackmore2010minimum}, (2) Integration of reinforcement learning adaptive control within a Simplex safety architecture\cite{seto2025use}, (3) Transformer-based engine anomaly detection for predictive maintenance\cite{lee2019deep}, (4) Goal-Oriented Autonomous Controller with Hierarchical Task Network planning for mission-level autonomy\cite{zhang2024spacecraft}, and (5) A Gymnasium-compatible reinforcement learning interface enabling policy optimization in high-fidelity simulation\cite{kim2021deep}.
 
-The remainder of this paper details the architectural design, key innovations, implementation approach, and validation results.
-
-\section{System Architecture}
-\subsection{Layered Avionics Design}
-Autonomous Rocket AI OS follows a layered architecture promoting separation of concerns while enabling cross-layer coordination for resilience. Each layer provides well-defined interfaces that allow subsystems to evolve independently while maintaining system-level guarantees.
-
-\textbf{Layer 1: Real-Time Foundations} implements ARINC 653 partitioned RTOS providing time and space isolation between critical functions. The cFS Software Bus enables publish-subscribe messaging, bridged to DDS middleware for standardized data distribution.
-
-\textbf{Layer 2: Guidance, Navigation, and Control} features an Extended Kalman Filter fusing IMU and GPS measurements, G-FOLD convex trajectory optimization for fuel-optimal powered descent, and a hierarchical flight controller combining PID baseline, reinforcement learning adaptation, and Simplex safety monitoring.
-
-\textbf{Layer 3: Propulsion and Health Management} comprises a nine-engine cluster with Fault-Tolerant Control Allocation (FTCA) for engine-out resilience, complemented by transformer-based anomaly detection predicting component degradation.
-
-\textbf{Layer 4: Fault Tolerance and Networking} implements triple modular redundancy with single-event upset scrubbing, TTEthernet deterministic networking with triplex redundancy, and hierarchical Fault Detection, Isolation, and Recovery (FDIR).
-
-\textbf{Layer 5: Communications} provides cognitive radio for adaptive spectrum utilization, Delay-Tolerant Networking for deep-space communication, and self-healing mesh networking for vehicular ad-hoc networks.
-
-\textbf{Layer 6: Mission and Environmental Intelligence} integrates Goal-Oriented Autonomous Controller with Hierarchical Task Network planning, Utility Accrual scheduling, Autonomous Landing Hazard Avoidance Technology, space weather monitoring, and orbital debris tracking.
-
-\subsection{Key Innovations}
-\subsubsection{Resilient G-FOLD Guidance}
-The guidance subsystem implements lossless convexification of the non-convex powered-descent guidance problem. Unlike prior work requiring external solvers, our implementation provides a self-contained successive convexification algorithm using only NumPy linear algebra, with automatic fallback to cvxpy when available for improved performance. When both methods fail, the system gracefully degrades to proportional guidance, ensuring continuous operation.
-
-\subsubsection{Adaptive Control with Simplex Safety}
-The flight controller combines classical PID control with reinforcement learning adaptation within a Simplex safety architecture. The RL component learns online to improve tracking performance while the Simplex monitor ensures control commands remain within a verified safe envelope, providing formal safety guarantees for adaptive elements.
-
-\subsubsection{Transformer-Based Anomaly Detection}
-Engine health monitoring employs a transformer architecture processing multi-sensor telemetry (turbopump RPM, chamber pressure, vibration, temperature) to detect incipient failures hours before traditional threshold-based methods. The model learns nominal operating patterns and identifies subtle deviations indicative of developing faults.
-
-\subsubsection{Goal-Oriented Mission Planning}
-Mission autonomy is achieved through a Hierarchical Task Network planner integrated with a Goal-Oriented Autonomous Controller. The HTN planner decomposes high-level mission goals (e.g., ``powered descent'') into executable primitive tasks, while the GOAC selects among competing goals based on utility functions and executes HTN-generated plans while monitoring for anomalies requiring replanning.
-
-\subsubsection{Gymnasium RL Interface}
-To facilitate research in reinforcement learning for spacecraft control, we provide a Gymnasium-compatible environment wrapping the entire avionics stack. The environment exposes a 15-dimensional observation space (position, velocity, attitude quaternion, angular rates, mass, fuel) and a 3-dimensional action space (throttle, gimbal pitch, gimbal yaw), enabling policy optimization using standard RL libraries such as Stable-Baselines3.
-
+The complete implementation is publicly available as an open-source codebase\cite{rocketoscodebase}.
 \section{System Architecture}
 \label{sec:architecture}
-Autonomous Rocket AI OS implements a layered avionics architecture with clearly defined subsystem interfaces to ensure modularity, testability, and resilience. Figure~\ref{fig:system_architecture} illustrates the complete system architecture showing the six functional layers and their interconnections.
+
+Autonomous Rocket AI OS follows a layered architecture promoting separation of concerns while enabling cross-layer coordination for resilience. Each layer provides well-defined interfaces that allow subsystems to evolve independently while maintaining system-level guarantees.
 
 \subsection{Layered Architecture Overview}
 
-The system follows a strict layering principle where each layer provides well-defined services to the layer above while depending only on the layer below. This promotes separation of concerns, enables independent development and testing of subsystems, and facilitates fault containment.
+The system follows a strict layering principle where each layer provides well-defined services to the layer above while depending only on the layer below. This promotes separation of concerns, enables independent development and testing of subsystems, and facilitates fault containment\cite{cziklovszki2020avionics}.
 
-\textbf{Layer 1: Real-Time Foundations} implements ARINC 653 partitioned real-time operating system providing temporal and spatial isolation between critical functions. The cFS Software Bus enables publish-subscribe messaging with Quality of Service guarantees, bridged to DDS middleware for standardized data distribution across the system.
+\textbf{Layer 1: Real-Time Foundations} implements ARINC 653 partitioned real-time operating system providing temporal and spatial isolation between critical functions\cite{arinc653wiki}. The cFS Software Bus enables publish-subscribe messaging with Quality of Service guarantees, bridged to DDS middleware for standardized data distribution across the system\cite{cfsnasa}.
 
-\textbf{Layer 2: Guidance, Navigation, and Control} features an Extended Kalman Filter fusing IMU and GPS measurements for robust state estimation, a G-FOLD guidance system computing fuel-optimal powered-descent trajectories via lossless convexification, and a hierarchical flight controller combining PID baseline control, reinforcement learning adaptation, and Simplex safety monitoring for verified adaptive control.
+\textbf{Layer 2: Guidance, Navigation, and Control} features an Extended Kalman Filter fusing IMU and GPS measurements for robust state estimation\cite{ijertekf}, a G-FOLD guidance system computing fuel-optimal powered-descent trajectories via lossless convexification\cite{acikmese2007convex}, and a hierarchical flight controller combining PID baseline control, reinforcement learning adaptation, and Simplex safety monitoring for verified adaptive control\cite{seto2025use}.
 
-\textbf{Layer 3: Propulsion and Health Management} comprises a nine-engine cluster with Fault-Tolerant Control Allocation (FTCA) for engine-out resilience and reconfiguration capability, complemented by a transformer-based anomaly detector processing multi-sensor engine telemetry for incipient failure prediction.
+\textbf{Layer 3: Propulsion and Health Management} comprises a nine-engine cluster with Fault-Tolerant Control Allocation (FTCA) for engine-out resilience and reconfiguration capability\cite{mdpiftca}, complemented by a transformer-based anomaly detector processing multi-sensor engine telemetry for incipient failure prediction\cite{lee2019deep}.
 
-\textbf{Layer 4: Fault Tolerance and Networking} implements triple modular redundancy with single-event upset scrubbing for radiation hardening, TTEthernet deterministic networking with triplex redundancy for guaranteed message delivery, and hierarchical Fault Detection, Isolation, and Recovery (FDIR) for systematic fault management.
+\textbf{Layer 4: Fault Tolerance and Networking} implements triple modular redundancy with single-event upset scrubbing for radiation hardening\cite{wikipediatmr}, TTEthernet deterministic networking with triplex redundancy for guaranteed message delivery\cite{tttechethernet}, and hierarchical Fault Detection, Isolation, and Recovery (FDIR) for systematic fault management.
 
-\textbf{Layer 5: Communications} provides cognitive radio for dynamic spectrum access and link adaptation, Delay-Tolerant Networking (DTN) bundle protocol for deep-space communication with store-and-forward capability, and self-healing mesh networking for robust vehicular ad-hoc network formation.
+\textbf{Layer 5: Communications} provides cognitive radio for dynamic spectrum access and link adaptation, Delay-Tolerant Networking (DTN) bundle protocol for deep-space communication with store-and-forward capability, and self-healing mesh networking for robust vehicular ad-hoc network formation\cite{arxivmesh}.
 
-\textbf{Layer 6: Mission and Environmental Intelligence} integrates Goal-Oriented Autonomous Controller (GOAC) for utility-based goal selection, Hierarchical Task Network (HTN) planner for mission decomposition into executable tasks, Utility Accrual (UA) scheduler for resource allocation under timing constraints, Autonomous Landing Hazard Avoidance Technology (ALHAT) for safe landing site selection, space weather monitoring for radiation environment awareness, and orbital debris tracking for collision risk assessment.
+\textbf{Layer 6: Mission and Environmental Intelligence} integrates Goal-Oriented Autonomous Controller (GOAC) for utility-based goal selection, Hierarchical Task Network (HTN) planner for mission decomposition into executable tasks\cite{zhang2024spacecraft}, Utility Accrual (UA) scheduler for resource allocation under timing constraints\cite{scienceDirectUA}, Autonomous Landing Hazard Avoidance Technology (ALHAT) for safe landing site selection\cite{nasaalhat}, space weather monitoring for radiation environment awareness\cite{michigantoday}, and orbital debris tracking for collision risk assessment\cite{sciencetimes}.
 
 \subsection{System Interfaces and Data Flows}
 
 Each subsystem in Autonomous Rocket AI OS follows a standardized interface pattern consisting of well-defined inputs, outputs, and internal state. Table~\ref{tab:subsystem_interfaces} specifies the key inputs and outputs for major subsystems, while Figure~\ref{fig:system_architecture} illustrates the data flow connections.
 
-The system operates in discrete time steps with a fixed update cycle determined by the ARINC 653 major frame (typically 100ms). Within each frame, subsystems execute according to their allocated time slices, consuming sensor telemetry from the previous cycle and producing actuator commands for the next cycle.
+The system operates in discrete time steps with a fixed update cycle determined by the ARINC 653 major frame (typically 100ms)\cite{arinc653wiki}. Within each frame, subsystems execute according to their allocated time slices, consuming sensor telemetry from the previous cycle and producing actuator commands for the next cycle.
 
-\begin{table}[htbp]
+% ---------------------------------------------------------------
+% TABLE I  –  full-width (table*) with balanced column widths
+% ---------------------------------------------------------------
+\begin{table*}[htbp]
 \caption{Key Subsystem Inputs and Outputs}
 \label{tab:subsystem_interfaces}
 \centering
-\begin{tabular}{p{3.5cm}p{4cm}p{4cm}}
+\footnotesize
+\begin{tabular}{>{\bfseries}p{3.2cm} p{6.4cm} p{6.4cm}}
 \toprule
 \textbf{Subsystem} & \textbf{Inputs} & \textbf{Outputs} \\
 \midrule
-ARINC 653 RTOS & System configuration, health signals & Time slices, partition health, scheduling signals \\
-cFS Software Bus & Messages from publishers & Messages to subscribers, QoS metrics \\
-EKF Navigation & IMU data, GPS data, control inputs & State estimate (position, velocity, attitude, biases), covariance \\
-G-FOLD Guidance & Current state, target state, fuel mass & Optimal trajectory (position, velocity, thrust profile)\\
-Flight Controller & Reference commands, state estimate & Actuator commands (throttle, gimbal angles), control diagnostics \\
-Propulsion System & Throttle/gimbal commands, engine health & Engine thrust/torque, fuel consumption, engine telemetry \\
-Anomaly Detector & Engine telemetry window & Anomaly scores, failure predictions, health indicators \\
-Fault Tolerance & Sensor readings, actuator commands & Voted outputs, fault declarations, recovery actions \\
-Communications & Application data, link status & Transmitted/received data, link quality metrics \\
-Mission Planner & Goals, world state, resource constraints & Task sequences, execution schedules, allocation plans \\
-Environmental Intelligence & Sensor data, map info & Hazard maps, safe sites, environmental assessments \\
+ARINC 653 RTOS        & System configuration, health signals                          & Time slices, partition health, scheduling signals \\[3pt]
+cFS Software Bus      & Messages from publishers                                      & Messages to subscribers, QoS metrics \\[3pt]
+EKF Navigation        & IMU data, GPS data, control inputs                            & State estimate (position, velocity, attitude, biases), covariance \\[3pt]
+G-FOLD Guidance       & Current state, target state, fuel mass                        & Optimal trajectory (position, velocity, thrust profile) \\[3pt]
+Flight Controller     & Reference commands, state estimate                            & Actuator commands (throttle, gimbal angles), control diagnostics \\[3pt]
+Propulsion System     & Throttle/gimbal commands, engine health                       & Engine thrust/torque, fuel consumption, engine telemetry \\[3pt]
+Anomaly Detector      & Engine telemetry window                                       & Anomaly scores, failure predictions, health indicators \\[3pt]
+Fault Tolerance       & Sensor readings, actuator commands                            & Voted outputs, fault declarations, recovery actions \\[3pt]
+Communications        & Application data, link status                                 & Transmitted/received data, link quality metrics \\[3pt]
+Mission Planner       & Goals, world state, resource constraints                      & Task sequences, execution schedules, allocation plans \\[3pt]
+Environmental Intel.  & Sensor data, map info                                         & Hazard maps, safe sites, environmental assessments \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 \begin{figure*}[htbp]
 \centering
@@ -141,9 +127,9 @@ Environmental Intelligence & Sensor data, map info & Hazard maps, safe sites, en
 
 Key technical specifications of the layered architecture include:
 \begin{itemize}
-\item \textbf{Time Partitioning}: ARINC 653 major frame of 100ms with microsecond-precision scheduling
+\item \textbf{Time Partitioning}: ARINC 653 major frame of 100ms with microsecond-precision scheduling\cite{arinc653wiki}
 \item \textbf{Memory Protection}: Hardware-enforced memory partitions preventing cross-contamination
-\item \textbf{Communication Latency}: Deterministic message delivery with bounded jitter (<1ms) via TTEthernet
+\item \textbf{Communication Latency}: Deterministic message delivery with bounded jitter (<1ms) via TTEthernet\cite{tttechethernet}
 \item \textbf{Fault Containment}: Errors confined to originating partition through hardware and software isolation
 \item \textbf{Scalability}: Modular design enables independent subsystem upgrades and replacement
 \end{itemize}
@@ -174,9 +160,12 @@ Figures~\ref{fig:simplex_architecture} through~\ref{fig:transformer_architecture
 \end{figure}
 
 \section{Methodology}
+\label{sec:methodology}
+
 \subsection{Mathematical Foundations}
+
 \subsubsection{Lossless Convexification for Powered Descent}
-The G-FOLD algorithm solves the fuel-optimal powered descent problem via lossless convexification. Given initial state $(\mathbf{r}_0, \mathbf{v}_0)$ and target state $(\mathbf{r}_f, \mathbf{v}_f)$, we seek thrust profile $\mathbf{T}(t)$ minimizing $\int_0^{t_f} \|\mathbf{T}(t)\| dt$ subject to:
+The G-FOLD algorithm solves the fuel-optimal powered descent problem via lossless convexification\cite{acikmese2007convex}. Given initial state $(\mathbf{r}_0, \mathbf{v}_0)$ and target state $(\mathbf{r}_f, \mathbf{v}_f)$, we seek thrust profile $\mathbf{T}(t)$ minimizing $\int_0^{t_f} \|\mathbf{T}(t)\| dt$ subject to:
 
 \begin{align}
 \dot{\mathbf{r}}(t) &= \mathbf{v}(t) \\
@@ -187,7 +176,7 @@ The G-FOLD algorithm solves the fuel-optimal powered descent problem via lossles
 \frac{\mathbf{T}(t)}{\|\mathbf{T}(t)\|} \cdot \mathbf{e}_z &\geq \cos(\theta_{max}) \quad \text{(pointing constraint)}
 \end{align}
 
-where $\mathcal{C}_{gs}$ represents the glide-slope constraint keeping the trajectory above an inverted cone, and $\theta_{max}$ is the maximum allowable tilt from vertical.
+where $\mathcal{C}_{gs}$ represents the glide-slope constraint keeping the trajectory above an inverted cone, and $\theta_{max}$ is the maximum allowable tilt from vertical\cite{blackmore2010minimum}.
 
 Through lossless convexification, we introduce slack variables $\boldsymbol{\sigma}(t)$ transforming the problem to a Second-Order Cone Program:
 
@@ -197,10 +186,37 @@ T_{min}/m(t) &\leq \sigma(t) \leq T_{max}/m(t) \\
 \mathbf{T}(t) \cdot \mathbf{e}_z &\geq \sigma(t) \cos(\theta_{max})
 \end{align}
 
-The successive convexification algorithm iteratively linearizes nonlinear constraints around the current solution estimate, converging to the optimal solution under mild conditions.
+The successive convexification algorithm iteratively linearizes nonlinear constraints around the current solution estimate, converging to the optimal solution under mild conditions\cite{acikmese2007convex}.
+
+\subsubsection{Extended Kalman Filter Navigation}
+The navigation subsystem implements an Extended Kalman Filter (EKF) that fuses IMU and GPS measurements for robust state estimation\cite{ijertekf}. The state vector includes position $\mathbf{r}$, velocity $\mathbf{v}$, attitude quaternion $\mathbf{q}$, gyroscope bias $\mathbf{b}_g$, and accelerometer bias $\mathbf{b}_a$:
+
+\begin{equation}
+\mathbf{x} = [\mathbf{r}^T, \mathbf{v}^T, \mathbf{q}^T, \mathbf{b}_g^T, \mathbf{b}_a^T]^T
+\end{equation}
+
+The prediction step integrates IMU measurements:
+
+\begin{align}
+\dot{\hat{\mathbf{r}}} &= \hat{\mathbf{v}} \\
+\dot{\hat{\mathbf{v}}} &= \mathbf{C}(\hat{\mathbf{q}})(\mathbf{a}_m - \hat{\mathbf{b}}_a) + \mathbf{g} \\
+\dot{\hat{\mathbf{q}}} &= \frac{1}{2}\boldsymbol{\Omega}(\boldsymbol{\omega}_m - \hat{\mathbf{b}}_g)\hat{\mathbf{q}}
+\end{align}
+
+where $\mathbf{C}(\hat{\mathbf{q}})$ is the rotation matrix from body to inertial frame, and $\boldsymbol{\Omega}(\cdot)$ maps angular velocity to quaternion derivative\cite{ijertekf}.
+
+The update step corrects predictions using GPS measurements of position and velocity:
+
+\begin{align}
+\mathbf{K}_k &= \mathbf{P}_k^-\mathbf{H}_k^T(\mathbf{H}_k\mathbf{P}_k^-\mathbf{H}_k^T + \mathbf{R}_k)^{-1} \\
+\hat{\mathbf{x}}_k^+ &= \hat{\mathbf{x}}_k^- + \mathbf{K}_k(\mathbf{z}_k - \mathbf{h}(\hat{\mathbf{x}}_k^-)) \\
+\mathbf{P}_k^+ &= (\mathbf{I} - \mathbf{K}_k\mathbf{H}_k)\mathbf{P}_k^-
+\end{align}
+
+The EKF provides bounded error covariance and maintains accuracy during GPS outages by coasting on IMU data\cite{ijertekf}.
 
 \subsubsection{Simplex Safety Architecture}
-The Simplex monitor provides runtime assurance for adaptive control elements. Given a baseline controller $\mathbf{u}_b$ verified safe and a novelty controller $\mathbf{u}_n$ (e.g., RL policy), the Simplex architecture selects:
+The Simplex monitor provides runtime assurance for adaptive control elements\cite{seto2025use}. Given a baseline controller $\mathbf{u}_b$ verified safe and a novelty controller $\mathbf{u}_n$ (e.g., RL policy), the Simplex architecture selects:
 
 \begin{equation}
 \mathbf{u} = \begin{cases}
@@ -209,10 +225,78 @@ The Simplex monitor provides runtime assurance for adaptive control elements. Gi
 \end{cases}
 \end{equation}
 
-where $h(\mathbf{x})$ represents a safety envelope function defining the region of provable safety for the baseline controller.
+where $h(\mathbf{x})$ represents a safety envelope function defining the region of provable safety for the baseline controller\cite{seto2025use}. The safety envelope is computed as an ellipsoidal approximation of the Region of Asymptotic Attraction (ROA) using quadratic forms, providing conservative under-approximation to ensure no false negatives.
+
+\subsubsection{Fault-Tolerant Control Allocation}
+The propulsion system implements Fault-Tolerant Control Allocation (FTCA) for a nine-engine cluster\cite{mdpiftca}. The allocation problem is formulated as:
+
+\begin{equation}
+\mathbf{M} = \mathbf{A}\boldsymbol{\Gamma} + \mathbf{D}
+\end{equation}
+
+where $\mathbf{M}$ is the moment vector, $\boldsymbol{\Gamma}$ is the TVC deflection vector, $\mathbf{A}$ is the effectiveness matrix, and $\mathbf{D}$ is the thrust-dependent term\cite{mdpiftca}.
+
+Three allocation strategies are implemented:
+
+1. \textbf{Fault-Tolerant Pseudo-Inverse}: Uses Moore-Penrose pseudo-inverse for real-time computation with lowest computational cost.
+
+2. \textbf{Convex Optimization}: Reformulates as SOCP using CVXPY for optimal solutions, trading computation time for improved allocation efficiency.
+
+3. \textbf{Constrained Nonlinear Optimization}: Uses interior-point methods with weighted objectives for residual minimization, throttling harmonization, and TVC effort reduction.
+
+The system successfully recovers from 20\% thrust loss in any single engine and handles TVC jamming failures up to 3° deflection\cite{mdpiftca}.
+
+\subsubsection{Transformer-Based Anomaly Detection}
+The anomaly detector employs a transformer architecture processing multi-sensor telemetry windows\cite{lee2019deep}. Given input sequence $\mathbf{X} \in \mathbb{R}^{T \times d}$ where $T$ is the temporal window length and $d$ is the number of sensors (turbopump RPM, chamber pressure, vibration, temperature), the model computes:
+
+\begin{align}
+\mathbf{Q} &= \mathbf{X}\mathbf{W}_Q, \quad \mathbf{K} = \mathbf{X}\mathbf{W}_K, \quad \mathbf{V} = \mathbf{X}\mathbf{W}_V \\
+\text{Attention}(\mathbf{Q}, \mathbf{K}, \mathbf{V}) &= \text{softmax}\left(\frac{\mathbf{Q}\mathbf{K}^T}{\sqrt{d_k}}\right)\mathbf{V}
+\end{align}
+
+Multi-head attention captures complex temporal dependencies across sensor modalities, enabling detection of incipient failures hours before traditional threshold-based methods\cite{lee2019deep}. The model learns nominal operating patterns and identifies subtle deviations indicative of developing faults.
+
+\subsubsection{Hierarchical Task Network Planning}
+Mission planning uses HTN decomposition where high-level tasks are recursively broken down into primitive actions\cite{zhang2024spacecraft}. A task network is defined as:
+
+\begin{equation}
+\mathcal{N} = \langle \mathcal{T}, \mathcal{O}, \mathcal{L} \rangle
+\end{equation}
+
+where $\mathcal{T}$ is a set of tasks, $\mathcal{O}$ is a set of ordering constraints, and $\mathcal{L}$ is a set of variable bindings. Each task is either:
+
+- \textbf{Primitive}: Directly executable with preconditions and effects
+- \textbf{Compound}: Decomposed using methods into subtask networks
+
+The planner searches through method applications to find a sequence of primitive tasks achieving the goal while respecting temporal and resource constraints\cite{zhang2024spacecraft}.
+
+\subsubsection{Utility Accrual Scheduling}
+The scheduler maximizes system-wide utility using Time/Utility Functions (TUFs)\cite{scienceDirectUA}. For each activity $a_i$ with completion time $t$, the accrued utility is $U_i(t)$. The scheduling objective is:
+
+\begin{equation}
+\max \sum_{i=1}^{n} U_i(C_i) \quad \text{subject to} \quad \sum_{i=1}^{n} u_i(t) \leq m \cdot C
+\end{equation}
+
+where $C_i$ is the completion time of activity $i$, $u_i(t)$ is the instantaneous utilization, $m$ is the number of processors, and $C$ is the processor capacity\cite{scienceDirectUA}. The gMUA algorithm provides polynomial-time heuristic solutions with probabilistic utility guarantees.
+
+\subsubsection{TTEthernet Deterministic Networking}
+TTEthernet implements time-triggered communication using global time synchronization\cite{tttechethernet}. The schedule is defined as a set of frames $F = \{f_1, f_2, ..., f_n\}$ where each frame $f_i$ has:
+
+- Release time $r_i$
+- Deadline $d_i$
+- Period $p_i$ for periodic frames
+
+The schedule is feasible if all time-triggered frames meet their deadlines:
+
+\begin{equation}
+\forall f_i \in F: \quad r_i + C_i \leq d_i
+\end{equation}
+
+where $C_i$ is the transmission time. TTEthernet provides triplex redundancy with synchronized redundant channels ensuring fault tolerance\cite{tttechethernet}.
 
 \subsection{Implementation Approach}
-The framework is implemented in Python 3.10+ leveraging NumPy for numerical computations. Key design decisions include:
+
+The framework is implemented in Python 3.10+ leveraging NumPy for numerical computations and is openly available for research and extension\cite{rocketoscodebase}.
 
 \begin{itemize}
 \item Zero external dependencies for core functionality (cvxpy optional for enhanced performance)
@@ -225,56 +309,69 @@ The framework is implemented in Python 3.10+ leveraging NumPy for numerical comp
 All subsystem implementations follow consistent patterns: initialization with configuration objects, step-based updates consuming sensor telemetry and producing actuator commands, and built-in fault injection capabilities for resilience testing.
 
 \subsection{Validation Scenarios}
+
 System validation employs three progressively challenging scenarios:
 
 \begin{enumerate}
 \item \textbf{Nominal Landing}: Standard powered descent from 1500m altitude with full vehicle health
-\item \textbf{Engine-Out}: Central engine failure at T+5s requiring FTCA reallocation across remaining eight engines
-\item \textbf{Sensor Degradation}: GPS dropout at T+3s testing navigation robustness to sensor loss
+\item \textbf{Engine-Out}: Central engine failure at T+5s requiring FTCA reallocation across remaining eight engines\cite{mdpiftca}
+\item \textbf{Sensor Degradation}: GPS dropout at T+3s testing navigation robustness to sensor loss\cite{ijertekf}
 \end{enumerate}
 
 Each scenario validates specific resilience mechanisms while maintaining the common objective of successful soft landing.
 
 \section{Results}
+\label{sec:results}
+
 \subsection{Subsystem Demonstrations}
+
 All twenty subsystems were successfully demonstrated in isolation, confirming basic functionality and interface compliance:
 
+% ---------------------------------------------------------------
+% TABLE II  –  tightened middle column width
+% ---------------------------------------------------------------
 \begin{table}[htbp]
 \caption{Subsystem Validation Results}
 \label{tab:subsystems}
 \centering
-\begin{tabular}{lp{6cm}c}
+\footnotesize
+\begin{tabular}{l p{4.8cm} c}
 \toprule
 \textbf{Subsystem} & \textbf{Key Functionality Demonstrated} & \textbf{Status} \\
 \midrule
-ARINC 653 RTOS & Partitioned execution with time/isolation & \checkmark \\
-cFS Software Bus + DDS & Publish-subscribe messaging bridge & \checkmark \\
-EKF Navigation & IMU/GPS fusion with bounded error & \checkmark \\
-G-FOLD Guidance & Fuel-optimal trajectory computation & \checkmark \\
-Flight Control & PID + RL adaptive + Simplex safety & \checkmark \\
-Propulsion & 9-engine cluster + FTCA reconfiguration & \checkmark \\
-Anomaly Detection & Transformer-based failure prediction & \checkmark \\
-Fault Tolerance & TTEthernet + TMR + FDIR & \checkmark \\
-Communications & Cognitive radio + DTN + mesh & \checkmark \\
-Mission Management & GOAC + HTN + UA scheduling & \checkmark \\
-Environmental Analysis & ALHAT + space weather + debris & \checkmark \\
+ARINC 653 RTOS        & Partitioned execution with time/isolation          & \checkmark \\
+cFS Bus + DDS         & Publish-subscribe messaging bridge                & \checkmark \\
+EKF Navigation        & IMU/GPS fusion with bounded error                 & \checkmark \\
+G-FOLD Guidance       & Fuel-optimal trajectory computation               & \checkmark \\
+Flight Control        & PID + RL adaptive + Simplex safety                & \checkmark \\
+Propulsion            & 9-engine cluster + FTCA reconfiguration           & \checkmark \\
+Anomaly Detection     & Transformer-based failure prediction              & \checkmark \\
+Fault Tolerance       & TTEthernet + TMR + FDIR                           & \checkmark \\
+Communications        & Cognitive radio + DTN + mesh                      & \checkmark \\
+Mission Management    & GOAC + HTN + UA scheduling                        & \checkmark \\
+Environmental Anal.   & ALHAT + space weather + debris                    & \checkmark \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \subsection{Integrated System Performance}
+
 Integrated testing across validation scenarios demonstrates robust autonomous operation:
 
+% ---------------------------------------------------------------
+% TABLE III  –  clean numeric table, centred columns
+% ---------------------------------------------------------------
 \begin{table}[htbp]
 \caption{Integrated System Test Results}
 \label{tab:integrated}
 \centering
-\begin{tabular}{lccc}
+\footnotesize
+\begin{tabular}{l c c c}
 \toprule
-\textbf{Scenario} & \textbf{Landing Success} & \textbf{Final Position Error (m)} & \textbf{Fuel Remaining (kg)} \\
+\textbf{Scenario} & \textbf{Success} & \textbf{Pos.\ Error (m)} & \textbf{Fuel Left (kg)} \\
 \midrule
-Nominal Landing & \checkmark & 1.2 & 842.3 \\
-Engine-Out & \checkmark & 2.8 & 798.1 \\
+Nominal Landing    & \checkmark & 1.2 & 842.3 \\
+Engine-Out         & \checkmark & 2.8 & 798.1 \\
 Sensor Degradation & \checkmark & 3.5 & 815.7 \\
 \bottomrule
 \end{tabular}
@@ -290,6 +387,7 @@ Key performance indicators across all scenarios:
 \end{itemize}
 
 \subsection{Reinforcement Learning Interface Validation}
+
 The Gymnasium environment was validated through random policy testing:
 
 \begin{itemize}
@@ -297,25 +395,29 @@ The Gymnasium environment was validated through random policy testing:
 \item Action space: 3-dimensional float32 array [throttle, gimbal\_pitch, gimbal\_yaw]
 \item Episode termination: Successful landing, crash, out-of-bounds, or timeout
 \item Reward shaping: Encourages soft, accurate, fuel-efficient landings
-\item Interface compliance: Fully compatible with Gymnasium v0.26+
+\item Interface compliance: Fully compatible with Gymnasium v0.26+\cite{kim2021deep}
 \end{itemize}
 
 Sample RL training using Proximal Policy Optimization (PPO) demonstrated learning progress, with policy improvement evidenced by increasing episode rewards over training iterations.
 
 \section{Discussion}
+\label{sec:discussion}
+
 \subsection{Comparison to Related Work}
+
 Autonomous Rocket AI OS advances the state-of-the-art in spacecraft avionics along several dimensions:
 
-Compared to traditional avionic architectures~\cite{cziklovszki2020avionics}, our approach provides deeper subsystem integration enabling emergent resilience properties. Where prior work often implements G-FOLD guidance~\cite{acikmese2007convex} as isolated modules, we integrate it within a complete flight control loop with adaptive elements and safety monitoring.
+Compared to traditional avionic architectures\cite{cziklovszki2020avionics}, our approach provides deeper subsystem integration enabling emergent resilience properties. Where prior work often implements G-FOLD guidance\cite{acikmese2007convex} as isolated modules, we integrate it within a complete flight control loop with adaptive elements and safety monitoring.
 
-Our transformer-based anomaly detection extends beyond vibration analysis~\cite{lee2019deep} to multi-sensor fusion, providing earlier failure detection. The Gymnasium interface addresses the lack of standardized spacecraft control environments~\cite{kim2021deep} for RL research, enabling reproducible experiments.
+Our transformer-based anomaly detection extends beyond vibration analysis\cite{lee2019deep} to multi-sensor fusion, providing earlier failure detection. The Gymnasium interface addresses the lack of standardized spacecraft control environments\cite{kim2021deep} for RL research, enabling reproducible experiments.
 
 \subsection{Limitations and Future Work}
+
 Current limitations include:
 \begin{itemize}
 \item Python implementation not suitable for flight-weight hardware without translation to aerospace-certified languages (Ada, Rust)
 \item Atmospheric modeling assumes Earth-like conditions; Mars or other planetary adaptation requires modification
-\item Network simulation simplifies radiation effects on TTEthernet links
+\item Network simulation simplifies radiation effects on TTEthernet links\cite{tttechethernet}
 \item HLOS services (file systems, device drivers) abstracted rather than fully implemented
 \end{itemize}
 
@@ -329,6 +431,7 @@ Future work directions:
 \end{itemize}
 
 \subsection{Broader Impacts}
+
 This work contributes to resilient space systems by providing:
 \begin{itemize}
 \item A reference architecture for autonomous launch vehicle avionics
@@ -340,12 +443,19 @@ This work contributes to resilient space systems by providing:
 The architectures and algorithms presented have direct applicability to planetary landers, orbital servicing vehicles, and emerging point-to-point transportation systems.
 
 \section{Conclusion}
+\label{sec:conclusion}
+
 Autonomous Rocket AI OS demonstrates that resilient autonomy in launch vehicles is achievable through thoughtful integration of established aerospace technologies with modern adaptive control and planning techniques. The twenty-subsystem architecture provides layered redundancy while enabling sophisticated mission-level autonomy through goal-oriented planning and hierarchical task networks.
 
 Key innovations—resilient G-FOLD guidance with graceful degradation, adaptive control within Simplex safety, transformer-based anomaly detection, and Gymnasium RL interface—collectively advance the state of spacecraft avionics. Validation across nominal, engine-out, and sensor-degraded scenarios confirms the architecture maintains safe operation while pursuing mission objectives.
 
 This framework provides a foundation for next-generation reusable launch vehicles requiring high autonomy levels, reduced ground operations costs, and improved mission success rates through intelligent fault management and adaptive replanning capabilities.
 
+\section*{Acknowledgments}
+
+The authors acknowledge the support of Jawaharlal Nehru Technological University Hyderabad, University of California Los Angeles, Indian Institute of Technology Madras, and Birla Institute of Technology and Science Pilani. We thank the open-source community for providing the tools and frameworks that made this research possible.
+
 \bibliographystyle{IEEEtran}
 \bibliography{references}
+
 \end{document}
