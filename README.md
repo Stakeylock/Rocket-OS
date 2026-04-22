@@ -172,10 +172,10 @@ This project is provided for research and educational purposes.
 
 ---
 
-**Author**: Jinitangsu Das
-**Email**: 23011p0521@jntuhceh.ac.in
+**Author**: Jinitangsu Das∗, Zayed Aman†, PV Sreekar‡, Gattigopula Sindhu§
+**Email**: {23011p0521, 23011p0543, 23011p0510, 24015a0510}@jntuhceh.ac.in
 **GitHub**: https://github.com/Stakeylock/Rocket-OS
-**Institution**: Jawaharlal Nehru Technological University Hyderabad
+**Institution**: Department of Computer Science and Engineering, Jawaharlal Nehru Technological University Hyderabad, Hyderabad, India
 **Location**: Hyderabad, India
 
 **Version**: 1.0.0
